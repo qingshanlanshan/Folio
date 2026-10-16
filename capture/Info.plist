@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>com.qshlab.folio.capture</string>
+  <key>CFBundleName</key><string>Folio</string>
+  <key>NSMicrophoneUsageDescription</key><string>Folio records your meetings and lectures to transcribe them on this Mac.</string>
+  <key>NSAudioCaptureUsageDescription</key><string>Folio records the other side of online meetings to transcribe them on this Mac.</string>
+</dict>
+</plist>

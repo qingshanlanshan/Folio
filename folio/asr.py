@@ -1,5 +1,6 @@
 """Speech to text. Every backend returns words with times and a confidence, so the rest of the app
 doesn't care which model ran (and a Chinese backend can be added later)."""
+import threading
 from dataclasses import dataclass, asdict
 from typing import Callable, Optional
 
@@ -8,6 +9,8 @@ import numpy as np
 from .audio import SR
 
 Progress = Optional[Callable[[float], None]]
+# MLX models are shared by the live view and the background worker; one call at a time.
+GPU = threading.Lock()
 
 
 @dataclass
@@ -43,7 +46,8 @@ class Parakeet:
             end = min(start + size, len(pcm))
             if end - start < cfg.hop_length:
                 break
-            res = self.model.generate(get_logmel(audio[start:end], cfg))[0]
+            with GPU:
+                res = self.model.generate(get_logmel(audio[start:end], cfg))[0]
             off = start / SR
             for t in res.tokens:
                 t.start += off
@@ -86,10 +90,11 @@ class Whisper:
 
     def transcribe(self, pcm: np.ndarray, prompt: str | None = None, progress: Progress = None) -> list[Word]:
         import mlx_whisper
-        r = mlx_whisper.transcribe(
-            pcm, path_or_hf_repo=self.repo, language="en", word_timestamps=True,
-            initial_prompt=prompt, condition_on_previous_text=False,
-            hallucination_silence_threshold=2.0, verbose=None)
+        with GPU:
+            r = mlx_whisper.transcribe(
+                pcm, path_or_hf_repo=self.repo, language="en", word_timestamps=True,
+                initial_prompt=prompt, condition_on_previous_text=False,
+                hallucination_silence_threshold=2.0, verbose=None)
         words = []
         for seg in r["segments"]:
             if seg.get("no_speech_prob", 0) > 0.6 and seg.get("avg_logprob", 0) < -1:

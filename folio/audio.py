@@ -32,3 +32,19 @@ def save_m4a(pcm: np.ndarray, path: str | Path, bitrate: int = 48000) -> None:
                 c.mux(p)
         for p in s.encode(None):
             c.mux(p)
+
+
+def save_flac(pcm: np.ndarray, path: str | Path) -> None:
+    """Lossless copy of a recorded track (about half the size of WAV)."""
+    with av.open(str(path), "w", format="flac") as c:
+        s = c.add_stream("flac", rate=SR, layout="mono")
+        step = 4096
+        x = (np.clip(pcm, -1, 1) * 32767).astype(np.int16)
+        for i in range(0, len(x), step):
+            f = av.AudioFrame.from_ndarray(x[i:i + step].reshape(1, -1), format="s16", layout="mono")
+            f.sample_rate = SR
+            f.pts = i
+            for p in s.encode(f):
+                c.mux(p)
+        for p in s.encode(None):
+            c.mux(p)

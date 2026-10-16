@@ -154,7 +154,10 @@ def _spectral(emb: np.ndarray, max_k: int = 10, min_k: int = 1, num: int = -1) -
     return best
 
 
-def diarize_spectral(pcm: np.ndarray, embedder: str = "resnet34", num_speakers: int = -1,
+SAME_VOICE = 0.7   # TitaNet centroids: same person ≥ 0.85, different people ≤ 0.56 (AMI, podcast)
+
+
+def diarize_spectral(pcm: np.ndarray, embedder: str = "titanet", num_speakers: int = -1,
                      min_share: float = 0.02, progress=None):
     """Returns (turns, {speaker: centroid embedding})."""
     regions = speech_regions(pcm)
@@ -181,6 +184,22 @@ def diarize_spectral(pcm: np.ndarray, embedder: str = "resnet34", num_speakers: 
         cents = {o: E[lab == o].mean(0) for o in ids if o != c}
         mine = E[lab == c].mean(0)
         lab[lab == c] = max(cents, key=lambda o: cents[o] @ mine)
+    # The eigengap over-splits short recordings; merge clusters that sound like the same voice.
+    while num_speakers <= 0:
+        ids = list(np.unique(lab))
+        if len(ids) < 2:
+            break
+        cents = {c: E[lab == c].mean(0) for c in ids}
+        cents = {c: v / (np.linalg.norm(v) + 1e-9) for c, v in cents.items()}
+        best, pair = SAME_VOICE, None
+        for i, a in enumerate(ids):
+            for b in ids[i + 1:]:
+                sim = float(cents[a] @ cents[b])
+                if sim > best:
+                    best, pair = sim, (a, b)
+        if not pair:
+            break
+        lab[lab == pair[1]] = pair[0]
     # Relabel by first appearance; centroids for matching to known people.
     order = {}
     for c in lab:

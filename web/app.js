@@ -30,7 +30,7 @@ const spkName = (t, spk) => {
   if (spk == null) return "Unknown";
   return t.speakers?.[spk]?.name || `Speaker ${spk < 26 ? String.fromCharCode(65 + spk) : spk}`;
 };
-const STEPS = { queued: "Queued", decoding: "Reading audio", transcribing: "Transcribing", speakers: "Finding speakers" };
+const STEPS = { recording: "Recording", queued: "Queued", decoding: "Reading audio", transcribing: "Transcribing", speakers: "Finding speakers" };
 
 let toastTimer;
 function toast(msg) {
@@ -175,6 +175,7 @@ function Meetings({ p, load }) {
     }
   };
   return html`
+    <${RecordPanel} p=${p} />
     <div class=${"drop" + (over ? " over" : "")}
       onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)}
       onDrop=${(e) => { e.preventDefault(); setOver(false); upload(e.dataTransfer.files); }}>
@@ -185,6 +186,89 @@ function Meetings({ p, load }) {
     </div>
     ${p.meetings.length ? html`<div class="mlist">${p.meetings.map((m) => html`<${MeetingRow} p=${p} m=${m} job=${p.jobs[m.id]} />`)}</div>`
       : html`<div class="empty">No recordings yet.</div>`}`;
+}
+
+const SOURCES = [
+  { id: "mic", mic: true, system: false, title: "Microphone", sub: "In-person meeting, lecture, class" },
+  { id: "both", mic: true, system: true, title: "Microphone + system audio", sub: "Online meeting: you on the mic, everyone else from Zoom, Teams, Meet…" },
+  { id: "system", mic: false, system: true, title: "System audio only", sub: "A webinar or video playing on this Mac" },
+];
+
+function RecordPanel({ p }) {
+  const [open, setOpen] = useState(false);
+  const [src, setSrc] = useState(() => { try { return localStorage.getItem("folio.source") || "mic"; } catch { return "mic"; } });
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+  const start = async () => {
+    const s = SOURCES.find((x) => x.id === src);
+    try { localStorage.setItem("folio.source", src); } catch {}
+    setBusy(true);
+    try {
+      const simulate = new URLSearchParams(location.search).get("simulate");
+      const r = await api("/live/start", { json: { project: p.id, title, mic: s.mic, system: s.system, simulate } });
+      location.hash = `#/p/${encodeURIComponent(p.id)}/m/${encodeURIComponent(r.mid)}`;
+    } catch (e) { toast(e.message); setBusy(false); }
+  };
+  if (!open) return html`<div class="row" style="margin-bottom:12px">
+    <button class="btn rec" onClick=${() => setOpen(true)}><i class="recdot"></i>Record</button></div>`;
+  return html`<div class="card recpanel">
+    <div class="sources">${SOURCES.map((s) => html`<label class=${"src" + (src === s.id ? " on" : "")}>
+      <input type="radio" name="src" checked=${src === s.id} onChange=${() => setSrc(s.id)} />
+      <b>${s.title}</b><span>${s.sub}</span></label>`)}</div>
+    <div class="row" style="margin-top:12px">
+      <input type="text" style="flex:1" placeholder="Title (optional)" value=${title} onInput=${(e) => setTitle(e.target.value)}
+        onKeyDown=${(e) => e.key === "Enter" && start()} />
+      <button class="btn rec" disabled=${busy} onClick=${start}><i class="recdot"></i>Start recording</button>
+      <button class="btn" onClick=${() => setOpen(false)}>Cancel</button>
+    </div>
+    ${src !== "mic" ? html`<div class="hint">The first time, macOS asks to allow system audio recording. Headphones avoid echo; without them Folio removes what the mic picks up from the speakers.</div>` : null}
+  </div>`;
+}
+
+function Live({ m, onDone }) {
+  const [st, setSt] = useState(null);
+  const [events, setEvents] = useState([]);
+  const [stopping, setStopping] = useState(false);
+  const box = useRef();
+  const stick = useRef(true);
+  useEffect(() => {
+    let since = 0, alive = true, timer;
+    const poll = async () => {
+      try {
+        const s = await api(`/live?since=${since}`);
+        if (!alive) return;
+        if (!s || s.mid !== m.id) { onDone(); return; }
+        if (s.events.length) { since += s.events.length; setEvents((e) => [...e, ...s.events]); }
+        setSt(s);
+        if (s.done) { onDone(); return; }
+      } catch {}
+      timer = setTimeout(poll, 500);
+    };
+    poll();
+    return () => { alive = false; clearTimeout(timer); };
+  }, [m.id]);
+  useEffect(() => { if (stick.current && box.current) box.current.scrollTop = box.current.scrollHeight; }, [events, st]);
+  const stop = async () => { setStopping(true); try { await api("/live/stop", { json: {} }); } catch (e) { toast(e.message); } };
+  const both = st && st.tracks.length === 2;
+  const label = (tr) => (both ? (tr === "mic" ? "You" : "Others") : null);
+  return html`<div class="live">
+    <div class="row livebar">
+      <span class="rectag"><i class="recdot pulse"></i>${st?.stopping || stopping ? "Finishing…" : "Recording"}</span>
+      <span class="elapsed">${clock(st?.elapsed || 0)}</span>
+      ${(st?.tracks || []).map((tr) => html`<span class="meter" title=${tr}><small>${tr === "mic" ? "Mic" : "System"}</small>
+        <i style=${`width:${Math.min(100, Math.round(Math.sqrt(st.levels[tr] || 0) * 260))}%`}></i></span>`)}
+      <span class="spacer"></span>
+      <button class="btn rec" disabled=${stopping || st?.stopping} onClick=${stop}>■ Stop</button>
+    </div>
+    ${st?.error ? html`<div class="hint err">${st.error}</div>` : null}
+    <div class="livetext" ref=${box} onScroll=${(e) => { const el = e.target; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
+      ${!events.length && !st?.partials?.length ? html`<div class="empty">Listening… text appears as people speak.</div>` : null}
+      ${events.map((e) => html`<p key=${e.seq}>${label(e.track) ? html`<b class=${"who-" + e.track}>${label(e.track)}</b>` : null}
+        <span class="ts" style="display:inline;margin-right:8px">${clock(e.start)}</span>${e.text}</p>`)}
+      ${(st?.partials || []).map((pt) => html`<p class="partial">${label(pt.track) ? html`<b class=${"who-" + pt.track}>${label(pt.track)}</b>` : null}${pt.text}</p>`)}
+    </div>
+    <div class="hint">Draft transcript. After you stop, the whole recording is transcribed again with speakers.</div>
+  </div>`;
 }
 
 function MeetingRow({ p, m, job }) {
@@ -269,6 +353,11 @@ function Meeting({ pid, mid }) {
   }, []);
 
   if (!m) return html`<div class="page"></div>`;
+  if (m.status === "recording") return html`<div class="page">
+    <div class="crumb"><a href=${"#/p/" + encodeURIComponent(pid)}>${m.projectName}</a></div>
+    <h1>${m.title}</h1>
+    <${Live} m=${m} onDone=${load} />
+  </div>`;
 
   const seek = (s) => { const a = audio.current; if (a) { a.currentTime = Math.max(0, s - 0.15); a.play(); } };
   const edit = async (body) => {

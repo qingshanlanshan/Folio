@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import jobs, store, transcript
+from . import jobs, live, store, transcript
 from .paths import ROOT
 
 app = FastAPI(title="Folio")
@@ -173,6 +173,44 @@ def export(pid: str, mid: str, fmt: str):
     body = transcript.export(m["transcript"], fmt, m["title"])
     name = f"{m['id']}.{fmt}"
     return PlainTextResponse(body, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# --- live recording
+
+class LiveIn(BaseModel):
+    project: str
+    title: str = ""
+    mic: bool = True
+    system: bool = False
+    simulate: str | None = None    # dev only (FOLIO_DEV=1): play a file in as the mic
+
+
+@app.post("/api/live/start")
+def live_start(body: LiveIn):
+    store.project_dir(body.project)
+    if not (body.mic or body.system):
+        raise HTTPException(400, "Pick a source")
+    title = body.title.strip() or time.strftime("Recording %d %b %H:%M")
+    try:
+        s = live.start(body.project, title, body.mic, body.system, body.simulate)
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return s.state()
+
+
+@app.get("/api/live")
+def live_state(since: int = 0):
+    s = live._session
+    return s.state(since) if s else None
+
+
+@app.post("/api/live/stop")
+def live_stop():
+    s = live.active()
+    if not s:
+        raise HTTPException(404, "Not recording")
+    s.stop()
+    return {"pid": s.pid, "mid": s.mid}
 
 
 @app.get("/api/jobs")
