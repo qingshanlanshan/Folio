@@ -106,11 +106,20 @@ final class Mic {
 
 // MARK: - System audio (process tap)
 
-func getProp<T>(_ obj: AudioObjectID, _ selector: AudioObjectPropertySelector, _ value: inout T) -> OSStatus {
+func getProp<T: BitwiseCopyable>(_ obj: AudioObjectID, _ selector: AudioObjectPropertySelector, _ value: inout T) -> OSStatus {
     var addr = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
                                           mElement: kAudioObjectPropertyElementMain)
     var size = UInt32(MemoryLayout<T>.size)
     return AudioObjectGetPropertyData(obj, &addr, 0, nil, &size, &value)
+}
+
+func deviceUID(_ dev: AudioObjectID) -> String? {
+    var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceUID, mScope: kAudioObjectPropertyScopeGlobal,
+                                          mElement: kAudioObjectPropertyElementMain)
+    var uid: Unmanaged<CFString>?
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    guard AudioObjectGetPropertyData(dev, &addr, 0, nil, &size, &uid) == noErr, let uid else { return nil }
+    return uid.takeRetainedValue() as String
 }
 
 final class SystemTap {
@@ -131,18 +140,16 @@ final class SystemTap {
         var outDev = AudioObjectID(kAudioObjectUnknown)
         err = getProp(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultSystemOutputDevice, &outDev)
         guard err == noErr else { throw osErr("default output", err) }
-        var uid: CFString = "" as CFString
-        err = getProp(outDev, kAudioDevicePropertyDeviceUID, &uid)
-        guard err == noErr else { throw osErr("output uid", err) }
+        guard let uid = deviceUID(outDev) else { throw osErr("output uid", -1) }
 
         let agg: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Folio system audio",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
-            kAudioAggregateDeviceMainSubDeviceKey: uid as String,
+            kAudioAggregateDeviceMainSubDeviceKey: uid,
             kAudioAggregateDeviceIsPrivateKey: true,
             kAudioAggregateDeviceIsStackedKey: false,
             kAudioAggregateDeviceTapAutoStartKey: true,
-            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: uid as String]],
+            kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: uid]],
             kAudioAggregateDeviceTapListKey: [[kAudioSubTapDriftCompensationKey: true,
                                                kAudioSubTapUIDKey: desc.uuid.uuidString]],
         ]
