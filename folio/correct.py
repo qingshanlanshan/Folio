@@ -100,6 +100,8 @@ def plausible(old: str, new: str, keyterms: set[str], vocab: set[str] = frozense
         return False                                   # number formatting
     if any("'" in t for t in o + n):
         return False                                   # contractions: it'll / it will, it was / it's
+    if not term and len(set(n) - set(o)) > 2:
+        return False                                   # rewrites several words
     if not term and len(o) != len(n) and _phon(" ".join(o)) != _phon(" ".join(n)):
         return False                                   # splitting or merging different-sounding words
     if not all(_known(t, vocab | keyterms) for t in n):

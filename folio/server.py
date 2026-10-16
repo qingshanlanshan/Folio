@@ -8,10 +8,12 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import correct, jobs, live, people, search, store, transcript
+from . import correct, jobs, live, people, search, store, summarize, transcript
 
 jobs.AFTER.append(people.match)
 jobs.HANDLERS["correct"] = correct.run
+jobs.HANDLERS["summarize"] = summarize.run
+jobs.FOLLOW_UP["process"] = "summarize"
 from .paths import ROOT
 
 app = FastAPI(title="Folio")
@@ -51,7 +53,69 @@ def new_project(body: ProjectIn):
 
 @app.get("/api/projects/{pid}")
 def project(pid: str):
-    return {**store.get_project(pid), "meetings": store.list_meetings(pid), "jobs": _jobs_for(pid)}
+    return {**store.get_project(pid), "meetings": store.list_meetings(pid), "jobs": _jobs_for(pid),
+            "state": summarize.state(pid), "todos": summarize.todos(pid)}
+
+
+class StateIn(BaseModel):
+    text: str
+
+
+@app.put("/api/projects/{pid}/state")
+def edit_state(pid: str, body: StateIn):
+    summarize.save_state(pid, body.text, "edited by you")
+    return project(pid)
+
+
+class TodoIn(BaseModel):
+    text: str | None = None
+    owner: str | None = None
+    due: str | None = None
+    status: str | None = None
+
+
+@app.post("/api/projects/{pid}/todos")
+def add_todo(pid: str, body: TodoIn):
+    if not (body.text or "").strip():
+        raise HTTPException(400, "text")
+    items = summarize.todos(pid)
+    items.append({"id": __import__("uuid").uuid4().hex[:6], "text": body.text.strip(), "owner": body.owner or "",
+                  "due": body.due or "", "status": "open", "touched": True, "created": time.time()})
+    summarize.save_todos(pid, items)
+    return project(pid)
+
+
+@app.patch("/api/projects/{pid}/todos/{tid}")
+def edit_todo(pid: str, tid: str, body: TodoIn):
+    items = summarize.todos(pid)
+    for x in items:
+        if x["id"] == tid:
+            for k in ("text", "owner", "due", "status"):
+                v = getattr(body, k)
+                if v is not None:
+                    x[k] = v
+            x["touched"] = True
+            x["updated"] = time.time()
+    summarize.save_todos(pid, items)
+    return project(pid)
+
+
+@app.delete("/api/projects/{pid}/todos/{tid}")
+def delete_todo(pid: str, tid: str):
+    summarize.save_todos(pid, [x for x in summarize.todos(pid) if x["id"] != tid])
+    return project(pid)
+
+
+class AskIn(BaseModel):
+    question: str
+
+
+@app.post("/api/projects/{pid}/ask")
+def ask(pid: str, body: AskIn):
+    store.project_dir(pid)
+    if not body.question.strip():
+        raise HTTPException(400, "question")
+    return summarize.ask(pid, body.question.strip())
 
 
 @app.put("/api/projects/{pid}")
@@ -97,6 +161,10 @@ def meeting(pid: str, mid: str):
     c = store.read_json(store.meeting_dir(pid, mid) / "corrections.json", default={"runs": [], "items": []})
     m["corrections"] = [i for i in c["items"] if i["status"] == "pending"]
     m["correctionRuns"] = c["runs"][-3:]
+    m["summary"] = store.read_json(store.meeting_dir(pid, mid) / "summary.json", default={}) or None
+    if m["summary"]:
+        m["todos"] = [x for x in summarize.todos(pid) if x.get("from", {}).get("meeting") == mid
+                      or (x.get("closedBy") or {}).get("meeting") == mid]
     return m
 
 
@@ -142,6 +210,14 @@ def reprocess(pid: str, mid: str, body: Reprocess):
 
 class CorrectIn(BaseModel):
     mode: str = "both"            # text | audio | both
+
+
+@app.post("/api/projects/{pid}/meetings/{mid}/summarize")
+def run_summary(pid: str, mid: str):
+    if not (store.meeting_dir(pid, mid) / "transcript.json").exists():
+        raise HTTPException(409, "No transcript yet")
+    jobs.submit(pid, mid, "summarize")
+    return {"ok": True}
 
 
 @app.post("/api/projects/{pid}/meetings/{mid}/correct")

@@ -30,7 +30,7 @@ const spkName = (t, spk) => {
   if (spk == null) return "Unknown";
   return t.speakers?.[spk]?.name || `Speaker ${spk < 26 ? String.fromCharCode(65 + spk) : spk}`;
 };
-const STEPS = { recording: "Recording", queued: "Queued", decoding: "Reading audio", transcribing: "Transcribing", speakers: "Finding speakers" };
+const STEPS = { "listening again": "Listening again", "checking text": "Checking text", summarizing: "Summarizing", recording: "Recording", queued: "Queued", decoding: "Reading audio", transcribing: "Transcribing", speakers: "Finding speakers" };
 
 let toastTimer;
 function toast(msg) {
@@ -137,7 +137,7 @@ function Home({ projects }) {
 
 function Project({ pid, reloadProjects }) {
   const [p, setP] = useState(null);
-  const [tab, setTab] = useState("meetings");
+  const [tab, setTab] = useState("overview");
   const load = useCallback(() => api(`/projects/${encodeURIComponent(pid)}`).then(setP).catch((e) => toast(e.message)), [pid]);
   useEffect(() => { load(); }, [load]);
   const busy = p && (Object.keys(p.jobs).length || p.meetings.some((m) => m.status === "queued" || m.status === "processing"));
@@ -159,11 +159,87 @@ function Project({ pid, reloadProjects }) {
     <h1><input value=${p.name} onChange=${(e) => rename(e.target.value)} /></h1>
     <div class="sub">${p.meetings.length} recording${p.meetings.length === 1 ? "" : "s"}</div>
     <div class="tabs">
+      <button class=${tab === "overview" ? "on" : ""} onClick=${() => setTab("overview")}>Overview</button>
       <button class=${tab === "meetings" ? "on" : ""} onClick=${() => setTab("meetings")}>Recordings</button>
       <button class=${tab === "knowledge" ? "on" : ""} onClick=${() => setTab("knowledge")}>Knowledge & glossary</button>
     </div>
-    ${tab === "meetings" ? html`<${Meetings} p=${p} load=${load} />` : html`<${Knowledge} p=${p} load=${load} />`}
+    ${tab === "overview" ? html`<${Overview} p=${p} setP=${setP} goRecordings=${() => setTab("meetings")} />`
+      : tab === "meetings" ? html`<${Meetings} p=${p} load=${load} />` : html`<${Knowledge} p=${p} load=${load} />`}
   </div>`;
+}
+
+function Overview({ p, setP, goRecordings }) {
+  const base = `/projects/${encodeURIComponent(p.id)}`;
+  const [q, setQ] = useState("");
+  const [ans, setAns] = useState(null);
+  const [asking, setAsking] = useState(false);
+  const [editState, setEditState] = useState(null);
+  const [newTodo, setNewTodo] = useState("");
+  const [showDone, setShowDone] = useState(false);
+  const titles = Object.fromEntries(p.meetings.map((m) => [m.id, m.title]));
+  const ask = async (e) => {
+    e.preventDefault();
+    if (!q.trim()) return;
+    setAsking(true); setAns(null);
+    try { setAns(await api(base + "/ask", { json: { question: q } })); } catch (err) { toast(err.message); }
+    setAsking(false);
+  };
+  const todo = async (id, body) => setP({ ...(await api(`${base}/todos/${id}`, { method: "PATCH", json: body })), jobs: p.jobs });
+  const addTodo = async (e) => {
+    e.preventDefault();
+    if (!newTodo.trim()) return;
+    setP(await api(base + "/todos", { json: { text: newTodo } })); setNewTodo("");
+  };
+  const open = p.todos.filter((x) => x.status === "open");
+  const done = p.todos.filter((x) => x.status !== "open");
+  const link = (mid, label) => html`<a class="src-link" href=${`#/p/${encodeURIComponent(p.id)}/m/${encodeURIComponent(mid)}`}>${label || titles[mid] || "meeting"}</a>`;
+  const cite = (text) => {
+    // [Meeting title, m:ss] → link to that moment.
+    const parts = text.split(/(\[[^\]]+?, \d+:\d\d\])/g);
+    return parts.map((part) => {
+      const mm = part.match(/^\[(.+), (\d+):(\d\d)\]$/);
+      const meet = mm && p.meetings.find((x) => x.title === mm[1]);
+      return meet ? html`<a class="cite" href=${`#/p/${encodeURIComponent(p.id)}/m/${encodeURIComponent(meet.id)}?t=${Number(mm[2]) * 60 + Number(mm[3])}`}>${mm[1]}, ${mm[2]}:${mm[3]}</a>` : part;
+    });
+  };
+  if (!p.meetings.length) return html`<div class="empty">Import or record the first meeting — the overview, to-dos and project state build up from there.
+    <div style="margin-top:12px"><button class="btn primary" onClick=${goRecordings}>Go to recordings</button></div></div>`;
+  return html`
+    <form class="ask" onSubmit=${ask}>
+      <input type="text" placeholder="Ask this project… e.g. “What did we decide about the battery?”" value=${q} onInput=${(e) => setQ(e.target.value)} />
+      <button class="btn primary" disabled=${asking}>${asking ? "Thinking…" : "Ask"}</button>
+    </form>
+    ${ans ? html`<div class="card answer"><div class="ans">${ans.answer.split("\n").filter(Boolean).map((l) => html`<p>${cite(l)}</p>`)}</div>
+      <button class="btn" onClick=${() => setAns(null)}>Close</button></div>` : null}
+
+    <div class="cols">
+      <section>
+        <div class="row"><h3>Where things stand</h3><span class="spacer"></span>
+          ${editState == null ? html`<button class="btn" onClick=${() => setEditState(p.state)}>Edit</button>` : null}</div>
+        ${editState != null ? html`<textarea rows="16" value=${editState} onInput=${(e) => setEditState(e.target.value)}></textarea>
+          <div class="row" style="margin-top:8px"><button class="btn primary" onClick=${async () => { setP({ ...(await api(base + "/state", { method: "PUT", json: { text: editState } })), jobs: p.jobs }); setEditState(null); }}>Save</button>
+          <button class="btn" onClick=${() => setEditState(null)}>Cancel</button></div>`
+          : p.state ? html`<div class="state" dangerouslySetInnerHTML=${{ __html: md(p.state) }}></div>
+            ${p.stateUpdated ? html`<div class="hint">Updated ${when(p.stateUpdated.at)} ${p.stateUpdated.reason}</div>` : null}`
+          : html`<div class="hint">Written by the AI after each meeting is summarized, and kept up to date. You can edit it.</div>`}
+      </section>
+      <section>
+        <h3>To-dos <small style="font-weight:400;color:var(--muted)">${open.length} open</small></h3>
+        <div class="todos">${open.map((x) => html`<label class="todo">
+          <input type="checkbox" onChange=${() => todo(x.id, { status: "done" })} />
+          <span>${x.text}${x.owner ? html` <span class="owner">${x.owner}</span>` : null}${x.due ? html` <small>due ${x.due}</small>` : null}
+            ${x.from?.meeting ? html`<small> · ${link(x.from.meeting)}</small>` : null}</span></label>`)}
+        </div>
+        <form class="row" style="margin-top:8px" onSubmit=${addTodo}><input type="text" style="flex:1" placeholder="Add a to-do" value=${newTodo} onInput=${(e) => setNewTodo(e.target.value)} /></form>
+        ${done.length ? html`<div class="hint" style="cursor:pointer" onClick=${() => setShowDone(!showDone)}>${showDone ? "▾" : "▸"} ${done.length} done</div>` : null}
+        ${showDone ? html`<div class="todos">${done.map((x) => html`<label class="todo done">
+          <input type="checkbox" checked onChange=${() => todo(x.id, { status: "open" })} />
+          <span><s>${x.text}</s>${x.closedBy?.meeting ? html`<small> · closed in ${link(x.closedBy.meeting)}</small>` : null}</span></label>`)}</div>` : null}
+      </section>
+    </div>
+
+    <h3>Recent meetings</h3>
+    <div class="mlist">${p.meetings.slice(0, 5).map((m) => html`<${MeetingRow} p=${p} m=${m} job=${p.jobs[m.id]} />`)}</div>`;
 }
 
 function Meetings({ p, load }) {
@@ -322,6 +398,7 @@ function Meeting({ pid, mid, at }) {
   const [count, setCount] = useState("-1");
   const [people, setPeople] = useState(null);
   useEffect(() => { api("/people").then(setPeople); }, [mid]);
+  const [view, setView] = useState(at != null ? "transcript" : null);
   const audio = useRef();
   const textRef = useRef();
   const base = `/projects/${encodeURIComponent(pid)}/meetings/${encodeURIComponent(mid)}`;
@@ -336,6 +413,11 @@ function Meeting({ pid, mid, at }) {
 
   const t = m?.transcript;
   const starts = useMemo(() => (t ? t.words.map((w) => w.start) : []), [t]);
+  const fixing = useMemo(() => {
+    const set = new Set();
+    for (const c of m?.corrections || []) for (let i = c.first; i <= c.last; i++) set.add(i);
+    return set;
+  }, [m?.corrections]);
 
   // Highlight the word being played, straight in the DOM (thousands of spans, no re-render).
   useEffect(() => {
@@ -365,14 +447,6 @@ function Meeting({ pid, mid, at }) {
     return () => removeEventListener("click", close);
   }, []);
 
-  if (!m) return html`<div class="page"></div>`;
-  if (m.status === "recording") return html`<div class="page">
-    <div class="crumb"><a href=${"#/p/" + encodeURIComponent(pid)}>${m.projectName}</a></div>
-    <h1>${m.title}</h1>
-    <${Live} m=${m} onDone=${load} />
-  </div>`;
-
-  const seek = (s) => { const a = audio.current; if (a) { a.currentTime = Math.max(0, s - 0.15); a.play(); } };
   // Opened from search: scroll to the passage and cue the audio there.
   const jumped = useRef(false);
   useEffect(() => {
@@ -386,6 +460,14 @@ function Meeting({ pid, mid, at }) {
       if (audio.current) audio.current.currentTime = Math.max(0, at - 0.15);
     }, 50);
   }, [t, at]);
+  if (!m) return html`<div class="page"></div>`;
+  if (m.status === "recording") return html`<div class="page">
+    <div class="crumb"><a href=${"#/p/" + encodeURIComponent(pid)}>${m.projectName}</a></div>
+    <h1>${m.title}</h1>
+    <${Live} m=${m} onDone=${load} />
+  </div>`;
+
+  const seek = (s) => { const a = audio.current; if (a) { a.currentTime = Math.max(0, s - 0.15); a.play(); } };
   const edit = async (body) => {
     try { setM(await api(base + "/transcript", { json: body })); } catch (e) { toast(e.message); }
   };
@@ -398,10 +480,28 @@ function Meeting({ pid, mid, at }) {
     } catch (e) { toast(e.message); }
   };
   const openMenu = (e, speaker, para) => setMenu({ x: Math.min(e.clientX, innerWidth - 250), y: e.clientY, speaker, para, project: pid });
-  const reprocess = async (kind) => {
+  const reprocess = (kind) => reprocessWith(kind, Number(count));
+  const reprocessWith = async (kind, speakers) => {
     if (kind === "process" && t?.edited && !confirm("Transcribe again? Your text edits in this recording will be replaced.")) return;
-    await api(base + "/reprocess", { json: { kind, speakers: Number(count) } });
+    await api(base + "/reprocess", { json: { kind, speakers } });
     toast(kind === "process" ? "Transcribing again…" : "Finding speakers again…"); load();
+  };
+  const tab = view || (m.summary || (m.job && m.job.kind === "summarize") ? "summary" : "transcript");
+  const summarizeNow = async () => {
+    try { await api(base + "/summarize", { json: {} }); load(); } catch (e) { toast(e.message); }
+  };
+  const more = (v) => {
+    if (v.startsWith("spk:")) { setCount(v.slice(4)); reprocessWith("speakers", Number(v.slice(4))); }
+    else if (v === "summarize") { setView("summary"); summarizeNow(); }
+    else if (v === "process") reprocess("process");
+    else if (v === "delete") remove();
+  };
+  const fix = async (mode) => {
+    setView("transcript");
+    try { await api(base + "/correct", { json: { mode } }); toast("Looking for fixes…"); load(); } catch (e) { toast(e.message); }
+  };
+  const decide = async (ids, accept) => {
+    try { setM(await api(base + "/corrections", { json: { ids, accept } })); } catch (e) { toast(e.message); }
   };
   const remove = async () => {
     if (!confirm(`Move "${m.title}" to the Trash?`)) return;
@@ -421,20 +521,42 @@ function Meeting({ pid, mid, at }) {
         ${m.job ? html`<span class="badge">${STEPS[m.job.step] || m.job.step}${m.job.progress ? ` ${Math.round(m.job.progress * 100)}%` : ""}</span>`
           : m.status === "error" ? html`<span class="badge err">Failed: ${m.error}</span>` : null}
         <span class="spacer"></span>
-        ${t ? html`
-          <select value=${count} onChange=${(e) => setCount(e.target.value)} title="How many people spoke">
-            <option value="-1">Speakers: auto</option>
-            ${[1, 2, 3, 4, 5, 6, 7, 8].map((n) => html`<option value=${n}>${n} speaker${n > 1 ? "s" : ""}</option>`)}
-          </select>
-          <button class="btn" disabled=${!!m.job} onClick=${() => reprocess("speakers")}>Find speakers again</button>
-          <select onChange=${(e) => { if (e.target.value) location.href = "/api" + base + "/export." + e.target.value; e.target.value = ""; }}>
-            <option value="">Export…</option><option value="md">Markdown</option><option value="txt">Text</option><option value="srt">Subtitles (SRT)</option>
-          </select>` : null}
-        <button class="btn" disabled=${!!m.job} onClick=${() => reprocess("process")}>Transcribe again</button>
-        <button class="btn danger" onClick=${remove}>Delete</button>
+        ${t ? html`<select disabled=${!!m.job} onChange=${(e) => { const v = e.target.value; e.target.value = ""; if (v) fix(v); }}>
+          <option value="">Fix transcript…</option>
+          <option value="text">Check text (AI, fast)</option>
+          <option value="audio">Listen again (audio)</option>
+          <option value="both">Both (best)</option>
+        </select>
+        <select onChange=${(e) => { if (e.target.value) location.href = "/api" + base + "/export." + e.target.value; e.target.value = ""; }}>
+          <option value="">Export…</option><option value="md">Markdown</option><option value="txt">Text</option><option value="srt">Subtitles (SRT)</option>
+        </select>` : null}
+        <select onChange=${(e) => { const v = e.target.value; e.target.value = ""; more(v); }}>
+          <option value="">More…</option>
+          ${t ? html`<optgroup label="Find speakers again">
+            <option value="spk:-1" disabled=${!!m.job}>Detect how many</option>
+            ${[2, 3, 4, 5, 6, 8].map((n) => html`<option value=${"spk:" + n} disabled=${!!m.job}>${n} speakers</option>`)}
+          </optgroup>
+          <option value="summarize" disabled=${!!m.job}>Summarize again</option>` : null}
+          <option value="process" disabled=${!!m.job}>Transcribe again</option>
+          <option value="delete">Delete recording…</option>
+        </select>
       </div>
     </div>
 
+    ${t ? html`<div class="tabs">
+      <button class=${tab === "summary" ? "on" : ""} onClick=${() => setView("summary")}>Summary</button>
+      <button class=${tab === "transcript" ? "on" : ""} onClick=${() => setView("transcript")}>Transcript${m.corrections?.length ? html` <span class="badge">${m.corrections.length}</span>` : null}</button>
+    </div>` : null}
+    ${t && tab === "summary" ? html`<${Summary} m=${m} job=${m.job} summarize=${summarizeNow} jump=${(sec) => { setView("transcript"); setTimeout(() => {
+        const i = starts.findIndex((x) => x >= sec - 0.01);
+        textRef.current?.querySelector(`span[data-i="${Math.max(0, i)}"]`)?.scrollIntoView({ block: "center" });
+        seek(sec); }, 30); }} />` : null}
+    <div style=${tab === "transcript" || !t ? "" : "display:none"}>
+    ${t && m.corrections?.length ? html`<${Fixes} items=${m.corrections} decide=${decide} goto=${(i) => {
+        const el = textRef.current?.querySelector(`span[data-i="${i}"]`);
+        el?.scrollIntoView({ block: "center" }); el?.closest(".para")?.classList.remove("flash");
+        void el?.offsetWidth; el?.closest(".para")?.classList.add("flash");
+      }} />` : t && m.correctionRuns?.length && !m.job ? html`<div class="hint" style="margin:-6px 0 12px">Last check (${m.correctionRuns.at(-1).mode}): ${m.correctionRuns.at(-1).found ? "all suggestions handled" : "nothing to fix"}.</div>` : null}
     ${t ? html`<${SpeakerBar} t=${t} open=${(e, k) => openMenu(e, k, null)} act=${act} />` : null}
     ${!t ? html`<div class="empty">${m.job || m.status !== "error" ? "The transcript will appear here when processing finishes." : "Processing failed."}</div>` : html`
       <div ref=${textRef}>
@@ -447,11 +569,12 @@ function Meeting({ pid, mid, at }) {
           ${editing === pi ? html`<${ParaEditor} t=${t} p=${p} done=${() => setEditing(null)} save=${(text) => edit({ op: "text", first: p.first, last: p.last, text }).then(() => setEditing(null))} />`
             : html`<div class="text">${t.words.slice(p.first, p.last + 1).map((w, k) => {
                 const i = p.first + k;
-                return html`<span data-i=${i} class=${w.edited ? "ed" : w.conf < 0.5 ? "low" : ""} onClick=${() => seek(w.start)}>${w.text}</span>${" "}`;
+                return html`<span data-i=${i} class=${fixing.has(i) ? "fix" : w.edited ? "ed" : w.conf < 0.75 ? "low" : ""} onClick=${() => seek(w.start)}>${w.text}</span>${" "}`;
               })}</div>`}
           ${editing === pi ? null : html`<button class="edit" title="Edit text" onClick=${() => setEditing(pi)}>✎</button>`}
         </div>`)}
       </div>`}
+    </div>
 
     ${menu ? html`<${SpeakerMenu} menu=${menu} t=${t} people=${people} act=${act} close=${() => setMenu(null)} />` : null}
   </div>`;
@@ -505,6 +628,69 @@ function SpeakerMenu({ menu, t, people, act, close }) {
         <i class="dot" style=${"background:" + color(s)}></i>${spkName(t, s)}</div>`)}
       <div class="mi" onClick=${() => { act("para", para, next); close(); }}>
         <i class="dot" style=${"background:" + color(next)}></i>Another speaker</div>` : null}
+  </div>`;
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+// Just enough Markdown for state.md: headings, bullets, bold, paragraphs.
+function md(text) {
+  const out = [];
+  let list = false;
+  for (const raw of (text || "").split("\n")) {
+    const line = esc(raw).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+    const li = line.match(/^\s*[-*] (.*)/);
+    if (li) { if (!list) { out.push("<ul>"); list = true; } out.push(`<li>${li[1]}</li>`); continue; }
+    if (list) { out.push("</ul>"); list = false; }
+    const h = line.match(/^(#{1,4}) (.*)/);
+    if (h) out.push(`<h4>${h[2]}</h4>`);
+    else if (line.trim()) out.push(`<p>${line}</p>`);
+  }
+  if (list) out.push("</ul>");
+  return out.join("");
+}
+
+const secs = (mmss) => { const p = String(mmss || "").split(":").map(Number); return p.length === 2 && !p.some(isNaN) ? p[0] * 60 + p[1] : null; };
+
+function Summary({ m, job, summarize, jump }) {
+  const s = m.summary;
+  const running = job && job.kind === "summarize";
+  if (!s) return html`<div class="empty">${running ? `Writing the summary… ${Math.round((job.progress || 0) * 100)}%`
+    : html`No summary yet. <button class="btn primary" onClick=${summarize}>Summarize</button>`}</div>`;
+  const done = (m.todos || []).filter((x) => x.closedBy?.meeting === m.id);
+  const list = (items, f) => items.length ? html`<ul>${items.map(f)}</ul>` : null;
+  return html`<div class="summary">
+    <p class="overview">${s.overview}</p>
+    ${s.topics.length ? html`<h4>Topics</h4>${list(s.topics, (x) => html`<li>
+      ${secs(x.start) != null ? html`<span class="ts" style="display:inline" onClick=${() => jump(secs(x.start))}>${x.start}</span> ` : null}
+      <b>${x.title}</b> — ${x.summary}</li>`)}` : null}
+    ${s.decisions.length ? html`<h4>Decisions</h4>${list(s.decisions, (x) => html`<li>${x}</li>`)}` : null}
+    ${s.action_items.length ? html`<h4>Action items</h4>${list(s.action_items, (x) => html`<li>${x.task}${x.owner ? html` <span class="owner">${x.owner}</span>` : null}${x.due ? html` <small>due ${x.due}</small>` : null}</li>`)}` : null}
+    ${done.length ? html`<h4>Done since earlier meetings</h4>${list(done, (x) => html`<li><s>${x.text}</s>${x.closedBy.note ? html` <small>${x.closedBy.note}</small>` : null}</li>`)}` : null}
+    ${s.progress.length ? html`<h4>Progress</h4>${list(s.progress, (x) => html`<li><b>${x.area}</b>: ${x.update}</li>`)}` : null}
+    ${s.open_questions.length ? html`<h4>Open questions</h4>${list(s.open_questions, (x) => html`<li>${x}</li>`)}` : null}
+    <div class="row hint" style="margin-top:18px">Written on this Mac by ${"Qwen3 8B"} using the project's knowledge, state, to-dos and earlier meetings.
+      <span class="spacer"></span><button class="btn" disabled=${!!job} onClick=${summarize}>${running ? "Summarizing…" : "Summarize again"}</button></div>
+  </div>`;
+}
+
+const SOURCE = { glossary: "Glossary", audio: "Second listen", text: "AI check" };
+
+function Fixes({ items, decide, goto }) {
+  const [open, setOpen] = useState(true);
+  return html`<div class="card fixes">
+    <div class="row"><b>${items.length} suggested fix${items.length === 1 ? "" : "es"}</b>
+      <span class="spacer"></span>
+      <button class="btn" onClick=${() => setOpen(!open)}>${open ? "Hide" : "Show"}</button>
+      <button class="btn" onClick=${() => decide(items.map((x) => x.id), false)}>Dismiss all</button>
+      <button class="btn primary" onClick=${() => decide(items.map((x) => x.id), true)}>Accept all</button></div>
+    ${open ? html`<div class="fixlist">${items.map((c) => html`<div class="fixrow">
+      <span class="fixtext" onClick=${() => goto(c.first)}><del>${c.old}</del> → <ins>${c.new}</ins>
+        <small>${SOURCE[c.source]}${c.why ? " · " + c.why : ""}</small></span>
+      <button class="btn" title="Reject" onClick=${() => decide([c.id], false)}>✕</button>
+      <button class="btn" title="Accept" onClick=${() => decide([c.id], true)}>✓</button></div>`)}</div>` : null}
   </div>`;
 }
 

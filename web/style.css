@@ -166,7 +166,41 @@ textarea { width: 100%; resize: vertical; font: 13px/1.5 ui-monospace, "SF Mono"
 @keyframes flash { 0%, 40% { background: var(--hl); } 100% { background: transparent; } }
 h3 { font: 600 17px var(--serif); }
 
+.fixes .fixlist { max-height: 260px; overflow-y: auto; margin-top: 10px; border-top: 1px solid var(--line); }
+.fixrow { display: flex; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.fixrow .btn { padding: 2px 9px; }
+.fixtext { flex: 1; cursor: pointer; font: 15px/1.5 var(--serif); }
+.fixtext del { color: var(--warn); }
+.fixtext ins { text-decoration: none; color: var(--accent); font-weight: 600; }
+.fixtext small { display: block; font: 12px var(--font); color: var(--muted); }
+.text span.fix { background: color-mix(in srgb, #e3a03a 28%, transparent); }
+
+.ask { display: flex; gap: 8px; margin-bottom: 14px; }
+.ask input { flex: 1; padding: 9px 12px; font-size: 15px; }
+.answer .ans { font: 16px/1.6 var(--serif); }
+.answer .ans p { margin: 0 0 8px; }
+.cite { background: var(--accent-soft); color: var(--accent); border-radius: 4px; padding: 0 4px; font: 12.5px var(--font); white-space: nowrap; }
+.cols { display: grid; grid-template-columns: 1.3fr 1fr; gap: 28px; margin-bottom: 18px; }
+.cols h3 { margin: 6px 0 8px; }
+.state { font: 15px/1.6 var(--serif); }
+.state h4, .summary h4 { font: 600 12px var(--font); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 16px 0 4px; }
+.state ul, .summary ul { margin: 4px 0; padding-left: 20px; }
+.state p { margin: 4px 0; }
+.todos { display: grid; gap: 2px; }
+.todo { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.todo input { margin-top: 4px; accent-color: var(--accent); }
+.todo small { color: var(--muted); }
+.todo.done { color: var(--muted); }
+.owner { font-size: 12px; background: var(--accent-soft); color: var(--accent); border-radius: 99px; padding: 0 7px; white-space: nowrap; }
+.src-link { color: var(--accent); }
+.summary { font: 16px/1.6 var(--serif); }
+.summary .overview { font-size: 17px; margin-top: 0; }
+.summary li { margin: 3px 0; }
+.summary small { color: var(--muted); font-family: var(--font); }
+.tabs .badge { font-size: 10.5px; padding: 0 6px; }
+
 @media (max-width: 720px) {
+  .cols { grid-template-columns: 1fr; }
   .layout { grid-template-columns: 1fr; }
   .side { display: none; }
   .page { padding: 18px 16px 60px; }

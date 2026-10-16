@@ -180,6 +180,7 @@ def after_transcript(pid: str, mid: str) -> None:
 
 AFTER: list = []
 HANDLERS.update(process=_process, speakers=_redo_speakers)
+FOLLOW_UP: dict[str, str] = {}       # kind -> kind to queue after it succeeds (e.g. process -> summarize)
 
 
 def _worker() -> None:
@@ -190,11 +191,13 @@ def _worker() -> None:
             time.sleep(1)
         key = f"{job['pid']}/{job['mid']}"
         t0 = time.time()
+        ok = False
         main = job["kind"] in ("process", "speakers")
         try:
             if main:
                 store.update_meeting(job["pid"], job["mid"], status="processing")
             HANDLERS[job["kind"]](job, key)
+            ok = True
             if main:
                 store.update_meeting(job["pid"], job["mid"], status="ready", error="",
                                      processedIn=round(time.time() - t0, 1))
@@ -212,6 +215,11 @@ def _worker() -> None:
         finally:
             with _lock:
                 _status.pop(key, None)
+        if ok and job["kind"] in FOLLOW_UP:
+            try:
+                submit(job["pid"], job["mid"], FOLLOW_UP[job["kind"]])
+            except store.NotFound:
+                pass
 
 
 def start() -> None:
