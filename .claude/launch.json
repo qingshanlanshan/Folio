@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "folio",
+      "runtimeExecutable": ".venv/bin/python",
+      "runtimeArgs": ["-m", "folio"],
+      "port": 8765
+    }
+  ]
+}
