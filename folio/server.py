@@ -8,9 +8,10 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import jobs, live, people, search, store, transcript
+from . import correct, jobs, live, people, search, store, transcript
 
 jobs.AFTER.append(people.match)
+jobs.HANDLERS["correct"] = correct.run
 from .paths import ROOT
 
 app = FastAPI(title="Folio")
@@ -93,6 +94,9 @@ def meeting(pid: str, mid: str):
         people.resolve(m["transcript"])
         m["paragraphs"] = transcript.paragraphs(m["transcript"])
     m["job"] = jobs.status().get(f"{pid}/{mid}")
+    c = store.read_json(store.meeting_dir(pid, mid) / "corrections.json", default={"runs": [], "items": []})
+    m["corrections"] = [i for i in c["items"] if i["status"] == "pending"]
+    m["correctionRuns"] = c["runs"][-3:]
     return m
 
 
@@ -132,6 +136,33 @@ def reprocess(pid: str, mid: str, body: Reprocess):
         raise HTTPException(400, "kind")
     jobs.submit(pid, mid, body.kind, speakers=body.speakers)
     return {"ok": True}
+
+
+# --- corrections
+
+class CorrectIn(BaseModel):
+    mode: str = "both"            # text | audio | both
+
+
+@app.post("/api/projects/{pid}/meetings/{mid}/correct")
+def run_correction(pid: str, mid: str, body: CorrectIn):
+    if body.mode not in ("text", "audio", "both"):
+        raise HTTPException(400, "mode")
+    if not (store.meeting_dir(pid, mid) / "transcript.json").exists():
+        raise HTTPException(409, "No transcript yet")
+    jobs.submit(pid, mid, "correct", mode=body.mode)
+    return {"ok": True}
+
+
+class DecideIn(BaseModel):
+    ids: list[str]
+    accept: bool
+
+
+@app.post("/api/projects/{pid}/meetings/{mid}/corrections")
+def decide_corrections(pid: str, mid: str, body: DecideIn):
+    correct.decide(pid, mid, body.ids, body.accept)
+    return meeting(pid, mid)
 
 
 # --- transcript edits
