@@ -68,7 +68,7 @@ def _tokens_to_words(tokens) -> list[Word]:
         if not t.text.strip():
             continue
         # A new word starts at a space, or after sentence punctuation ("Paul." + "'Cause").
-        if t.text.startswith(" ") or not words or words[-1].text[-1] in ".?!,;:":
+        if t.text.startswith(" ") or not words or (words[-1].text[-1] in ".?!,;:" and not t.text[0].isdigit()):
             words.append(Word(t.text.strip(), t.start, t.end, t.confidence))
         else:
             w = words[-1]
