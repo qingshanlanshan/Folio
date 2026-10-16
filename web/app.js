@@ -55,7 +55,10 @@ function useHash() {
     addEventListener("hashchange", f);
     return () => removeEventListener("hashchange", f);
   }, []);
-  return hash.replace(/^#\/?/, "").split("/").map(decodeURIComponent);
+  const [path, query] = hash.replace(/^#\/?/, "").split("?");
+  const parts = path.split("/").map(decodeURIComponent);
+  parts.query = new URLSearchParams(query || "");
+  return parts;
 }
 
 // ---------- app shell
@@ -74,16 +77,20 @@ function App() {
   const mid = route[2] === "m" ? route[3] : null;
 
   return html`<div class="layout">
-    <${Sidebar} projects=${projects} pid=${pid} reload=${reload} />
+    <${Sidebar} projects=${projects} pid=${pid} route=${route} reload=${reload} />
     <main>
-      ${mid ? html`<${Meeting} key=${pid + "/" + mid} pid=${pid} mid=${mid} />`
+      ${mid ? html`<${Meeting} key=${pid + "/" + mid} pid=${pid} mid=${mid} at=${Number(route.query.get("t")) || null} />`
         : pid ? html`<${Project} key=${pid} pid=${pid} reloadProjects=${reload} />`
+        : route[0] === "people" && route[1] ? html`<${Person} key=${route[1]} id=${route[1]} projects=${projects} />`
+        : route[0] === "people" ? html`<${People} />`
+        : route[0] === "search" ? html`<${Search} key=${route[1]} q=${route[1] || ""} />`
         : html`<${Home} projects=${projects} />`}
     </main>
   </div>`;
 }
 
-function Sidebar({ projects, pid, reload }) {
+function Sidebar({ projects, pid, route, reload }) {
+  const [q, setQ] = useState(route[0] === "search" && !(route[1] || "").startsWith("@") ? route[1] : "");
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const creating = useRef(false);
@@ -101,6 +108,10 @@ function Sidebar({ projects, pid, reload }) {
   };
   return html`<nav class="side">
     <a class="brand" href="#/"><img src="icon.svg" alt="" />Folio</a>
+    <form onSubmit=${(e) => { e.preventDefault(); if (q.trim()) location.hash = "#/search/" + encodeURIComponent(q.trim()); }}>
+      <input type="search" placeholder="Search words or names" value=${q} onInput=${(e) => setQ(e.target.value)} />
+    </form>
+    <a class=${"plink" + (route[0] === "people" ? " on" : "")} href="#/people"><span>People</span></a>
     <h4>Projects</h4>
     ${(projects || []).map((p) => html`<a class=${"plink" + (p.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(p.id)}>
       <span>${p.name}</span><small>${p.meetings || ""}</small></a>`)}
@@ -304,11 +315,13 @@ function Knowledge({ p, load }) {
 
 // ---------- meeting
 
-function Meeting({ pid, mid }) {
+function Meeting({ pid, mid, at }) {
   const [m, setM] = useState(null);
   const [menu, setMenu] = useState(null);     // {x, y, para}
   const [editing, setEditing] = useState(null); // paragraph index
   const [count, setCount] = useState("-1");
+  const [people, setPeople] = useState(null);
+  useEffect(() => { api("/people").then(setPeople); }, [mid]);
   const audio = useRef();
   const textRef = useRef();
   const base = `/projects/${encodeURIComponent(pid)}/meetings/${encodeURIComponent(mid)}`;
@@ -360,10 +373,31 @@ function Meeting({ pid, mid }) {
   </div>`;
 
   const seek = (s) => { const a = audio.current; if (a) { a.currentTime = Math.max(0, s - 0.15); a.play(); } };
+  // Opened from search: scroll to the passage and cue the audio there.
+  const jumped = useRef(false);
+  useEffect(() => {
+    if (at == null || !t || jumped.current) return;
+    jumped.current = true;
+    const i = starts.findIndex((x) => x >= at - 0.01);
+    setTimeout(() => {
+      const el = textRef.current?.querySelector(`span[data-i="${Math.max(0, i)}"]`);
+      el?.scrollIntoView({ block: "center" });
+      el?.closest(".para")?.classList.add("flash");
+      if (audio.current) audio.current.currentTime = Math.max(0, at - 0.15);
+    }, 50);
+  }, [t, at]);
   const edit = async (body) => {
     try { setM(await api(base + "/transcript", { json: body })); } catch (e) { toast(e.message); }
   };
   const rename = async (title) => { if (title.trim() && title !== m.title) setM(await api(base, { method: "PATCH", json: { title } })); };
+  const act = async (kind, a, b) => {
+    try {
+      if (kind === "para") return edit({ op: "speaker", first: a.first, last: a.last, speaker: b });
+      setM(await api(`${base}/speakers/${a}/${kind}`, { json: b }));
+      if (kind === "link") api("/people").then(setPeople);
+    } catch (e) { toast(e.message); }
+  };
+  const openMenu = (e, speaker, para) => setMenu({ x: Math.min(e.clientX, innerWidth - 250), y: e.clientY, speaker, para, project: pid });
   const reprocess = async (kind) => {
     if (kind === "process" && t?.edited && !confirm("Transcribe again? Your text edits in this recording will be replaced.")) return;
     await api(base + "/reprocess", { json: { kind, speakers: Number(count) } });
@@ -401,11 +435,12 @@ function Meeting({ pid, mid }) {
       </div>
     </div>
 
+    ${t ? html`<${SpeakerBar} t=${t} open=${(e, k) => openMenu(e, k, null)} act=${act} />` : null}
     ${!t ? html`<div class="empty">${m.job || m.status !== "error" ? "The transcript will appear here when processing finishes." : "Processing failed."}</div>` : html`
       <div ref=${textRef}>
         ${m.paragraphs.map((p, pi) => html`<div class="para" key=${p.first}>
           <div class="who">
-            <span class="chip" onClick=${(e) => { e.stopPropagation(); setMenu({ x: Math.min(e.clientX, innerWidth - 240), y: e.clientY, para: p }); }}>
+            <span class="chip" onClick=${(e) => { e.stopPropagation(); openMenu(e, p.speaker, p); }}>
               <i class="dot" style=${"background:" + color(p.speaker)}></i>${spkName(t, p.speaker)}</span>
             <span class="ts" onClick=${() => seek(p.start)}>${clock(p.start)}</span>
           </div>
@@ -418,7 +453,7 @@ function Meeting({ pid, mid }) {
         </div>`)}
       </div>`}
 
-    ${menu ? html`<${SpeakerMenu} menu=${menu} t=${t} edit=${edit} close=${() => setMenu(null)} />` : null}
+    ${menu ? html`<${SpeakerMenu} menu=${menu} t=${t} people=${people} act=${act} close=${() => setMenu(null)} />` : null}
   </div>`;
 }
 
@@ -438,25 +473,152 @@ function ParaEditor({ t, p, save, done }) {
   </div>`;
 }
 
-function SpeakerMenu({ menu, t, edit, close }) {
-  const { para } = menu;
-  const [name, setName] = useState(t.speakers?.[para.speaker]?.name || "");
+function SpeakerMenu({ menu, t, people, act, close }) {
+  const { para, speaker } = menu;
+  const spk = speaker ?? para.speaker;
+  const info = t.speakers?.[spk] || {};
+  const [q, setQ] = useState("");
   const input = useRef();
-  useEffect(() => { input.current?.focus(); input.current?.select(); }, []);
+  useEffect(() => { input.current?.focus(); }, []);
   const ids = Object.keys(t.speakers).map(Number);
   const next = Math.max(-1, ...ids) + 1;
-  const stop = (e) => e.stopPropagation();
-  return html`<div class="menu" style=${`left:${menu.x}px;top:${menu.y + 8}px`} onClick=${stop}>
-    <div class="lbl">Name ${spkName(t, para.speaker)} everywhere</div>
-    <form onSubmit=${(e) => { e.preventDefault(); edit({ op: "rename", speaker: para.speaker, name }); close(); }}>
-      <input ref=${input} type="text" placeholder="e.g. Alex Tan" value=${name} onInput=${(e) => setName(e.target.value)} />
+  const ql = q.trim().toLowerCase();
+  const pid = menu.project;
+  const matches = (people || [])
+    .filter((p) => !ql || p.name.toLowerCase().includes(ql) || (p.aliases || []).some((a) => a.toLowerCase().includes(ql)))
+    .sort((a, b) => (b.projects.includes(pid) - a.projects.includes(pid)) || a.name.localeCompare(b.name))
+    .slice(0, 6);
+  const exact = (people || []).some((p) => p.name.toLowerCase() === ql);
+  const linkTo = (body) => { act("link", spk, body); close(); };
+  return html`<div class="menu" style=${`left:${menu.x}px;top:${Math.min(menu.y + 8, innerHeight - 380)}px`} onClick=${(e) => e.stopPropagation()}>
+    <div class="lbl">Who is ${spkName(t, spk)}?</div>
+    <form onSubmit=${(e) => { e.preventDefault(); if (matches.length && ql && !exact && matches.length === 1) linkTo({ person: matches[0].id }); else if (ql) linkTo(exact ? { person: people.find((p) => p.name.toLowerCase() === ql).id } : { name: q.trim() }); }}>
+      <input ref=${input} type="text" placeholder="Type a name…" value=${q} onInput=${(e) => setQ(e.target.value)} />
     </form>
-    <hr />
-    <div class="lbl">This paragraph was said by</div>
-    ${ids.filter((s) => s !== para.speaker).map((s) => html`<div class="mi" onClick=${() => { edit({ op: "speaker", first: para.first, last: para.last, speaker: s }); close(); }}>
-      <i class="dot" style=${"background:" + color(s)}></i>${spkName(t, s)}</div>`)}
-    <div class="mi" onClick=${() => { edit({ op: "speaker", first: para.first, last: para.last, speaker: next }); close(); }}>
-      <i class="dot" style=${"background:" + color(next)}></i>New speaker</div>
+    ${matches.map((p) => html`<div class="mi" onClick=${() => linkTo({ person: p.id })}>
+      <span class="avatar">${initials(p.name)}</span>${p.name}${p.id === info.person ? html`<span class="spacer"></span>✓` : null}</div>`)}
+    ${ql && !exact ? html`<div class="mi" onClick=${() => linkTo({ name: q.trim() })}><span class="avatar new">+</span>New person “${q.trim()}”</div>` : null}
+    ${info.person ? html`<div class="mi muted" onClick=${() => { act("unlink", spk, {}); close(); }}>Not ${info.name}</div>` : null}
+    ${para ? html`<hr />
+      <div class="lbl">Only this paragraph was said by</div>
+      ${ids.filter((s) => s !== para.speaker).map((s) => html`<div class="mi" onClick=${() => { act("para", para, s); close(); }}>
+        <i class="dot" style=${"background:" + color(s)}></i>${spkName(t, s)}</div>`)}
+      <div class="mi" onClick=${() => { act("para", para, next); close(); }}>
+        <i class="dot" style=${"background:" + color(next)}></i>Another speaker</div>` : null}
+  </div>`;
+}
+
+function SpeakerBar({ t, open, act }) {
+  const secs = {};
+  for (const w of t.words) if (w.speaker != null) secs[w.speaker] = (secs[w.speaker] || 0) + (w.end - w.start);
+  const ids = Object.keys(t.speakers).map(Number).filter((k) => secs[k]).sort((a, b) => secs[b] - secs[a]);
+  return html`<div class="spkbar">${ids.map((k) => {
+    const s = t.speakers[k];
+    return html`<div class="spk">
+      <span class="chip" onClick=${(e) => { e.stopPropagation(); open(e, k); }}><i class="dot" style=${"background:" + color(k)}></i>${spkName(t, k)}</span>
+      <small>${clock(secs[k])}${s.person && s.auto ? " · matched by voice" : ""}</small>
+      ${!s.person && s.suggested ? html`<span class="sug">${s.suggested.name}?
+        <button title="Yes" onClick=${() => act("link", k, { person: s.suggested.person })}>✓</button>
+        <button title="No" onClick=${() => act("unlink", k, { reject: true })}>✕</button></span>` : null}
+      ${s.person && s.auto ? html`<span class="sug"><button title="Confirm" onClick=${() => act("link", k, { person: s.person })}>✓</button></span>` : null}
+    </div>`;
+  })}</div>`;
+}
+
+// ---------- people & search
+
+const initials = (n) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0].toUpperCase()).join("");
+
+function People() {
+  const [list, setList] = useState(null);
+  const [name, setName] = useState("");
+  const load = () => api("/people").then(setList);
+  useEffect(() => { load(); }, []);
+  const add = async (e) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    const p = await api("/people", { json: { name } });
+    setName(""); location.hash = "#/people/" + p.id;
+  };
+  return html`<div class="page">
+    <h1>People</h1>
+    <div class="sub">Shared across projects. Name a speaker in any recording to add them; their voice is recognised next time.</div>
+    <form class="row" style="margin-bottom:16px" onSubmit=${add}>
+      <input type="text" placeholder="Add someone by name" value=${name} onInput=${(e) => setName(e.target.value)} />
+      <button class="btn">Add</button></form>
+    ${list && !list.length ? html`<div class="empty">No people yet.</div>` : html`<div class="mlist">${(list || []).map((p) => html`
+      <a class="mrow" href=${"#/people/" + p.id}><span class="t"><span class="avatar">${initials(p.name)}</span> ${p.name}${p.me ? " (me)" : ""}</span>
+        <span class="m">${p.voiceCount ? `${p.voiceCount} voice sample${p.voiceCount > 1 ? "s" : ""}` : "no voice yet"}</span>
+        <span class="m">${p.projects.length} project${p.projects.length === 1 ? "" : "s"}${p.notes ? " · " + p.notes.slice(0, 80) : ""}</span></a>`)}</div>`}
+  </div>`;
+}
+
+function Person({ id, projects }) {
+  const [p, setP] = useState(null);
+  const [notes, setNotes] = useState("");
+  const [aliases, setAliases] = useState("");
+  const load = () => api("/people/" + id).then((x) => { setP(x); setNotes(x.notes); setAliases(x.aliases.join(", ")); });
+  useEffect(() => { load(); }, [id]);
+  if (!p) return html`<div class="page"></div>`;
+  const save = async (body) => { await api("/people/" + id, { method: "PUT", json: body }); load(); };
+  const toggleProject = (pid) => save({ projects: p.projects.includes(pid) ? p.projects.filter((x) => x !== pid) : [...p.projects, pid] });
+  const remove = async () => {
+    if (!confirm(`Remove ${p.name}? Recordings keep their text; the speaker just becomes unnamed.`)) return;
+    await api("/people/" + id, { method: "DELETE" }); location.hash = "#/people";
+  };
+  const dirty = notes !== p.notes || aliases !== p.aliases.join(", ");
+  return html`<div class="page">
+    <div class="crumb"><a href="#/people">People</a></div>
+    <h1><input value=${p.name} onChange=${(e) => save({ name: e.target.value })} /></h1>
+    <div class="sub">${p.voiceCount ? `${p.voiceCount} voice sample${p.voiceCount > 1 ? "s" : ""}` : "No voice sample yet: name them in a recording"}
+      · <label style="cursor:pointer"><input type="checkbox" checked=${!!p.me} onChange=${(e) => save({ me: e.target.checked })} /> This is me</label></div>
+    <div class="knowledge">
+      <label>Projects</label>
+      <div class="row">${(projects || []).map((pr) => html`<button class=${"pill" + (p.projects.includes(pr.id) ? " on" : "")} onClick=${() => toggleProject(pr.id)}>${pr.name}</button>`)}</div>
+      <label>Also known as</label>
+      <input type="text" style="width:100%" placeholder="Nicknames, how others call them (comma separated)" value=${aliases} onInput=${(e) => setAliases(e.target.value)} />
+      <label>Notes</label>
+      <p>Role, responsibilities, what they work on. The summary AI reads this.</p>
+      <textarea rows="5" value=${notes} onInput=${(e) => setNotes(e.target.value)}></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" disabled=${!dirty} onClick=${() => save({ notes, aliases: aliases.split(",").map((x) => x.trim()).filter(Boolean) })}>Save</button>
+        <span class="spacer"></span><button class="btn danger" onClick=${remove}>Remove person</button></div>
+    </div>
+    <h3 style="margin-top:28px">Spoke in</h3>
+    ${p.appearances.length ? html`<div class="mlist">${p.appearances.map((a) => html`
+      <a class="mrow" href=${`#/p/${encodeURIComponent(a.project)}/m/${encodeURIComponent(a.meeting)}`}>
+        <span class="t">${a.title}</span><span class="m">${clock(a.seconds)} spoken</span>
+        <span class="m">${a.projectName} · ${when(a.date)}</span></a>`)}</div>` : html`<div class="empty">Not in any recording yet.</div>`}
+    ${p.appearances.length ? html`<p><a class="btn" href=${"#/search/" + encodeURIComponent("@" + id)}>Everything ${p.name} said →</a></p>` : null}
+  </div>`;
+}
+
+function Search({ q }) {
+  const [r, setR] = useState(null);
+  const byPerson = q.startsWith("@") ? q.slice(1) : null;
+  const [who, setWho] = useState(null);
+  useEffect(() => {
+    setR(null);
+    const params = byPerson ? `person=${encodeURIComponent(byPerson)}` : `q=${encodeURIComponent(q)}`;
+    api("/search?" + params).then(setR).catch((e) => toast(e.message));
+    if (byPerson) api("/people/" + byPerson).then(setWho).catch(() => {});
+  }, [q]);
+  const mark = (text) => {
+    if (byPerson || !q) return text;
+    const i = text.toLowerCase().indexOf(q.toLowerCase());
+    return i < 0 ? text : html`${text.slice(0, i)}<mark>${text.slice(i, i + q.length)}</mark>${text.slice(i + q.length)}`;
+  };
+  return html`<div class="page">
+    <h1>${byPerson ? `Said by ${who?.name || "…"}` : `“${q}”`}</h1>
+    <div class="sub">${r ? `${r.total} passage${r.total === 1 ? "" : "s"}` : "Searching…"}</div>
+    ${r?.people?.length ? html`<div class="row" style="margin-bottom:16px">${r.people.map((p) => html`
+      <a class="pill on" href=${"#/people/" + p.id}><span class="avatar">${initials(p.name)}</span> ${p.name}</a>
+      <a class="pill" href=${"#/search/" + encodeURIComponent("@" + p.id)}>What ${p.name} said</a>`)}</div>` : null}
+    <div class="mlist">${(r?.hits || []).map((h) => html`
+      <a class="mrow hit" href=${`#/p/${encodeURIComponent(h.project)}/m/${encodeURIComponent(h.meeting)}?t=${h.start}`}>
+        <span class="t">${h.title} <small style="font-weight:400;color:var(--muted)">· ${h.projectName} · ${when(h.date)}</small></span>
+        <span class="m">${clock(h.start)}</span>
+        <span class="snip"><b>${h.speaker}:</b> ${mark(h.snippet)}</span></a>`)}</div>
   </div>`;
 }
 

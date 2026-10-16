@@ -8,7 +8,9 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import jobs, live, store, transcript
+from . import jobs, live, people, search, store, transcript
+
+jobs.AFTER.append(people.match)
 from .paths import ROOT
 
 app = FastAPI(title="Folio")
@@ -88,6 +90,7 @@ def meeting(pid: str, mid: str):
     m = store.get_meeting(pid, mid)
     m["projectName"] = store.get_project(pid)["name"]
     if m["transcript"]:
+        people.resolve(m["transcript"])
         m["paragraphs"] = transcript.paragraphs(m["transcript"])
     m["job"] = jobs.status().get(f"{pid}/{mid}")
     return m
@@ -170,9 +173,83 @@ def export(pid: str, mid: str, fmt: str):
     m = store.get_meeting(pid, mid)
     if not m["transcript"]:
         raise HTTPException(404, "no transcript yet")
-    body = transcript.export(m["transcript"], fmt, m["title"])
+    body = transcript.export(people.resolve(m["transcript"]), fmt, m["title"])
     name = f"{m['id']}.{fmt}"
     return PlainTextResponse(body, headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
+# --- people
+
+class PersonIn(BaseModel):
+    name: str | None = None
+    aliases: list[str] | None = None
+    notes: str | None = None
+    projects: list[str] | None = None
+    me: bool | None = None
+    project: str | None = None     # on create: the project they're first seen in
+
+
+@app.get("/api/people")
+def list_people():
+    return [{k: v for k, v in p.items() if k != "voices"} | {"voiceCount": len(p["voices"])}
+            for p in people.all_people()]
+
+
+@app.post("/api/people")
+def new_person(body: PersonIn):
+    if not (body.name or "").strip():
+        raise HTTPException(400, "name required")
+    p = people.create(body.name, body.project, bool(body.me))
+    if body.me:
+        people.update(p["id"], me=True)
+    return p
+
+
+@app.get("/api/people/{person}")
+def person(person: str):
+    p = people.get(person)
+    return {**p, "voiceCount": len(p["voices"]), "appearances": people.appearances(person)}
+
+
+@app.put("/api/people/{person}")
+def edit_person(person: str, body: PersonIn):
+    return people.update(person, name=(body.name or "").strip() or None, aliases=body.aliases,
+                         notes=body.notes, projects=body.projects, me=body.me)
+
+
+@app.delete("/api/people/{person}")
+def delete_person(person: str):
+    people.delete(person)
+    return {"ok": True}
+
+
+class LinkIn(BaseModel):
+    person: str | None = None      # existing person id
+    name: str | None = None        # or create a new person with this name
+    reject: bool = False           # for unlink: also dismiss the suggestion
+
+
+@app.post("/api/projects/{pid}/meetings/{mid}/speakers/{spk}/link")
+def link_speaker(pid: str, mid: str, spk: str, body: LinkIn):
+    person_id = body.person
+    if not person_id:
+        if not (body.name or "").strip():
+            raise HTTPException(400, "person or name")
+        person_id = people.create(body.name, pid)["id"]
+    people.get(person_id)
+    people.link(pid, mid, spk, person_id)
+    return meeting(pid, mid)
+
+
+@app.post("/api/projects/{pid}/meetings/{mid}/speakers/{spk}/unlink")
+def unlink_speaker(pid: str, mid: str, spk: str, body: LinkIn):
+    people.unlink(pid, mid, spk, reject=body.reject)
+    return meeting(pid, mid)
+
+
+@app.get("/api/search")
+def do_search(q: str = "", person: str | None = None):
+    return search.search(q, person)
 
 
 # --- live recording
