@@ -1,0 +1,13 @@
+# Engine (Python 3.12, Apple Silicon)
+parakeet-mlx==0.5.3
+mlx-whisper==0.4.3
+mlx-lm==0.32.2
+sherpa-onnx==1.13.8
+av==19.0.1
+numpy
+scipy
+fastapi
+uvicorn[standard]
+python-multipart
+# benchmark only
+jiwer
