@@ -2,7 +2,8 @@ import numpy as np
 from folio import audio, diarize
 from spike.refs import CLIPS
 from spike.bench import der
-pcm = audio.load("/private/tmp/claude-501/-Users-jiaruiye-SomebodyMakeThis/34991108-1013-4941-a5a4-cadd95596333/scratchpad/ami80s.flac")
+# 80 s of the AMI kickoff (mostly one speaker): short recordings used to be over-split.
+pcm = audio.load(CLIPS["ami"]()[0])[75 * 16000:155 * 16000]
 for sec in (33, 80):
     turns, c = diarize.diarize_spectral(pcm[: sec * 16000])
     print(sec, "s:", len(c), "speakers")
