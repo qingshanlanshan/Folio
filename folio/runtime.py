@@ -15,7 +15,7 @@ import time
 from . import store
 
 SETTINGS = store.HOME / "settings.json"
-DEFAULTS = {"autoUnloadMinutes": 10, "notifications": True}
+DEFAULTS = {"autoUnloadMinutes": 10, "notifications": True, "aiEngine": "local", "claudeModel": "claude-opus-5-5"}
 
 
 class Cancelled(Exception):

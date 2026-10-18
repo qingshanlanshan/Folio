@@ -237,7 +237,7 @@ def text_fixes(pid: str, t: dict, entries, ppl, knowledge: str, hints: dict, pro
         if notes:
             user += "\n\nRecognizer notes (may help, may be wrong):\n" + "\n".join(notes)
         try:
-            r = chat_json(SYSTEM, user, max_tokens=1500)
+            r = chat_json(SYSTEM, user, max_tokens=1500, effort="low")
         except ValueError:
             continue
         for f in r.get("fixes", []) if isinstance(r, dict) else []:
@@ -313,8 +313,10 @@ def run(job: dict, key: str) -> None:
         found, hints = audio_fixes(pid, mid, t, entries, ppl, lambda f: set_step(key, "listening again", f))
         items += found
     if mode in ("text", "both"):
+        from .llm import for_project
         set_step(key, "checking text")
-        items += text_fixes(pid, t, entries, ppl, knowledge, hints, lambda f: set_step(key, "checking text", f))
+        with for_project(pid):
+            items += text_fixes(pid, t, entries, ppl, knowledge, hints, lambda f: set_step(key, "checking text", f))
     prev = store.read_json(d / "corrections.json", default={"runs": [], "items": []})
     rejected = {(i["old"], i["new"]) for i in prev["items"] if i["status"] == "rejected"}
     fresh = [i for i in _merge(items) if (i["old"], i["new"]) not in rejected]

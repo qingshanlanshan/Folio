@@ -85,6 +85,7 @@ function App() {
         : route[0] === "people" ? html`<${People} />`
         : route[0] === "search" ? html`<${Search} key=${route[1]} q=${route[1] || ""} />`
         : route[0] === "activity" ? html`<${Activity} />`
+        : route[0] === "settings" ? html`<${Settings} />`
         : html`<${Home} projects=${projects} />`}
     </main>
   </div>`;
@@ -113,6 +114,7 @@ function Sidebar({ projects, pid, route, reload }) {
       <input type="search" placeholder="Search words or names" value=${q} onInput=${(e) => setQ(e.target.value)} />
     </form>
     <a class=${"plink" + (route[0] === "people" ? " on" : "")} href="#/people"><span>People</span></a>
+    <a class=${"plink" + (route[0] === "settings" ? " on" : "")} href="#/settings"><span>Settings</span></a>
     <h4>Projects</h4>
     ${(projects || []).map((p) => html`<a class=${"plink" + (p.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(p.id)}>
       <span>${p.name}</span><small>${p.meetings || ""}</small></a>`)}
@@ -254,6 +256,69 @@ function Activity() {
   </div>`;
 }
 
+function Settings() {
+  const [s, setS] = useState(null);
+  const [key, setKey] = useState("");
+  const [test, setTest] = useState(null);
+  const [testing, setTesting] = useState(false);
+  const load = () => api("/settings").then(setS).catch((e) => toast(e.message));
+  useEffect(() => { load(); }, []);
+  if (!s) return html`<div class="page"></div>`;
+  const put = async (body) => { try { setS(await api("/settings", { method: "PUT", json: body })); } catch (e) { toast(e.message); } };
+  const saveKey = async (k) => {
+    try { setS(await api("/settings/claude-key", { method: "PUT", json: { key: k } })); setKey(""); setTest(null); toast(k ? "Key saved" : "Key removed"); }
+    catch (e) { toast(e.message); }
+  };
+  const runTest = async () => {
+    setTesting(true); setTest(null);
+    try { setTest(await api("/settings/claude-test", { json: {} })); } catch (e) { setTest({ ok: false, error: e.message }); }
+    setTesting(false); load();
+  };
+  const claude = s.aiEngine === "claude";
+  const month = s.claudeUsage.month;
+  return html`<div class="page settings">
+    <h1>Settings</h1>
+
+    <h3>AI for summaries, fixes and questions</h3>
+    <div class="card">
+      <label class=${"src" + (!claude ? " on" : "")}><input type="radio" name="eng" checked=${!claude} onChange=${() => put({ aiEngine: "local" })} />
+        <b>On this Mac — Qwen3 8B</b><span>Free and private: nothing leaves this Mac. Slower, and less careful with details.</span></label>
+      <label class=${"src" + (claude ? " on" : "")} style="margin-top:8px"><input type="radio" name="eng" checked=${claude} onChange=${() => put({ aiEngine: "claude" })} />
+        <b>Claude (Anthropic API)</b><span>Better summaries and answers, uses your API credits. Transcripts and project notes are sent to Anthropic; audio never leaves this Mac. Projects marked “keep on this Mac” still use the local model.</span></label>
+    </div>
+
+    <div class=${"card" + (claude ? "" : " dim")}>
+      <div class="row"><b>Claude model</b><span class="spacer"></span>
+        <select value=${s.claudeModel} onChange=${(e) => put({ claudeModel: e.target.value })}>
+          ${s.claudeModels.map((m) => html`<option value=${m.id}>${m.name} — $${m.in} / $${m.out} per M tokens</option>`)}
+        </select></div>
+      <div class="hint">Opus is the most capable; Sonnet costs half as much; Haiku is very cheap but simpler. A one-hour meeting is roughly 15k tokens of transcript.</div>
+
+      <div class="row" style="margin-top:14px"><b>API key</b><span class="spacer"></span>
+        ${s.claudeKey ? html`<span class="m">${s.claudeKey.source === "folio" ? `Saved (${s.claudeKey.hint})` : "From ANTHROPIC_API_KEY"}</span>` : html`<span class="m">Not set</span>`}</div>
+      <form class="row" style="margin-top:6px" onSubmit=${(e) => { e.preventDefault(); if (key.trim()) saveKey(key.trim()); }}>
+        <input type="password" autocomplete="off" style="flex:1" placeholder=${s.claudeKey ? "Replace with a new key" : "sk-ant-…"} value=${key} onInput=${(e) => setKey(e.target.value)} />
+        <button class="btn primary" disabled=${!key.trim()}>Save key</button>
+        ${s.claudeKey?.source === "folio" ? html`<button type="button" class="btn danger" onClick=${() => confirm("Remove the saved API key?") && saveKey("")}>Remove</button>` : null}
+      </form>
+      <div class="hint">Get a key at console.anthropic.com → API keys. It's stored in ~/Folio/anthropic-key, readable only by you.</div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn" disabled=${!s.claudeKey || testing} onClick=${runTest}>${testing ? "Testing…" : "Test connection"}</button>
+        ${test ? html`<span class=${"m" + (test.ok ? "" : " errtext")}>${test.ok ? `✓ ${test.model} answered in ${test.seconds}s` : test.error}</span>` : null}
+      </div>
+      <div class="row" style="margin-top:14px"><b>Usage this month</b><span class="spacer"></span>
+        <span class="m">${month.requests} request${month.requests === 1 ? "" : "s"} · about $${(month.usd || 0).toFixed(2)}</span></div>
+      <div class="hint">Estimated from token counts at list prices; your Anthropic console has the exact bill.</div>
+    </div>
+
+    <h3>Notifications</h3>
+    <div class="card">
+      <label class="row"><input type="checkbox" checked=${s.notifications} onChange=${(e) => put({ notifications: e.target.checked })} />
+        Notify me when no Folio window is open (still recording, transcript ready)</label>
+    </div>
+  </div>`;
+}
+
 function Home({ projects }) {
   return html`<div class="page">
     <h1>Folio</h1>
@@ -290,13 +355,14 @@ function Project({ pid, reloadProjects }) {
     <div class="crumb"><a href="#/">Projects</a></div>
     <h1><input value=${p.name} onChange=${(e) => rename(e.target.value)} /></h1>
     <div class="sub">${p.meetings.length} recording${p.meetings.length === 1 ? "" : "s"}</div>
+    <${Capture} p=${p} load=${load} />
     <div class="tabs">
       <button class=${tab === "overview" ? "on" : ""} onClick=${() => setTab("overview")}>Overview</button>
       <button class=${tab === "meetings" ? "on" : ""} onClick=${() => setTab("meetings")}>Recordings</button>
       <button class=${tab === "knowledge" ? "on" : ""} onClick=${() => setTab("knowledge")}>Knowledge & glossary</button>
     </div>
     ${tab === "overview" ? html`<${Overview} p=${p} setP=${setP} goRecordings=${() => setTab("meetings")} />`
-      : tab === "meetings" ? html`<${Meetings} p=${p} load=${load} />` : html`<${Knowledge} p=${p} load=${load} />`}
+      : tab === "meetings" ? html`<${Meetings} p=${p} />` : html`<${Knowledge} p=${p} load=${load} />`}
   </div>`;
 }
 
@@ -334,8 +400,7 @@ function Overview({ p, setP, goRecordings }) {
       return meet ? html`<a class="cite" href=${`#/p/${encodeURIComponent(p.id)}/m/${encodeURIComponent(meet.id)}?t=${Number(mm[2]) * 60 + Number(mm[3])}`}>${mm[1]}, ${mm[2]}:${mm[3]}</a>` : part;
     });
   };
-  if (!p.meetings.length) return html`<div class="empty">Import or record the first meeting — the overview, to-dos and project state build up from there.
-    <div style="margin-top:12px"><button class="btn primary" onClick=${goRecordings}>Go to recordings</button></div></div>`;
+  if (!p.meetings.length) return html`<div class="empty">Record or import the first meeting above — the overview, to-dos and project state build up from there.</div>`;
   return html`
     <form class="ask" onSubmit=${ask}>
       <input type="text" placeholder="Ask this project… e.g. “What did we decide about the battery?”" value=${q} onInput=${(e) => setQ(e.target.value)} />
@@ -374,10 +439,40 @@ function Overview({ p, setP, goRecordings }) {
     <div class="mlist">${p.meetings.slice(0, 5).map((m) => html`<${MeetingRow} p=${p} m=${m} job=${p.jobs[m.id]} />`)}</div>`;
 }
 
-function Meetings({ p, load }) {
+function Meetings({ p }) {
+  return p.meetings.length ? html`<div class="mlist">${p.meetings.map((m) => html`<${MeetingRow} p=${p} m=${m} job=${p.jobs[m.id]} />`)}</div>`
+    : html`<div class="empty">No recordings yet. Record or import one above.</div>`;
+}
+
+const SOURCES = [
+  { id: "mic", mic: true, system: false, short: "Microphone", sub: "In-person meeting, lecture or class" },
+  { id: "both", mic: true, system: true, short: "Online meeting", sub: "You on the mic, everyone else from Zoom, Teams, Meet… (mic + system audio)" },
+  { id: "system", mic: false, system: true, short: "Computer audio", sub: "A webinar or video playing on this Mac (system audio only)" },
+];
+
+function Capture({ p, load }) {
+  const [st, refresh] = useStatus();
+  const [src, setSrc] = useState(() => { try { return localStorage.getItem("folio.source") || "mic"; } catch { return "mic"; } });
+  const [title, setTitle] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [started, setStarted] = useState(null);    // mid of a recording started here, until status catches up
   const [over, setOver] = useState(false);
   const [uploading, setUploading] = useState(0);
   const input = useRef();
+  const rec = st?.recording;
+  const liveMid = rec && rec.pid === p.id ? rec.mid : started;
+
+  const start = async () => {
+    const s = SOURCES.find((x) => x.id === src);
+    try { localStorage.setItem("folio.source", src); } catch {}
+    setBusy(true);
+    try {
+      const simulate = new URLSearchParams(location.search).get("simulate");
+      const r = await api("/live/start", { json: { project: p.id, title, mic: s.mic, system: s.system, simulate } });
+      setStarted(r.mid); setTitle(""); refresh(); load();
+    } catch (e) { toast(e.message); }
+    setBusy(false);
+  };
   const upload = async (files) => {
     files = [...files];
     setUploading((n) => n + files.length);
@@ -393,58 +488,35 @@ function Meetings({ p, load }) {
       load();
     }
   };
-  return html`
-    <${RecordPanel} p=${p} />
-    <div class=${"drop" + (over ? " over" : "")}
+
+  if (liveMid) return html`<div class="card livecard">
+    <div class="row"><b>${p.meetings.find((m) => m.id === liveMid)?.title || rec?.title || "Recording"}</b><span class="spacer"></span>
+      <a class="hint" style="margin:0" href=${`#/p/${encodeURIComponent(p.id)}/m/${encodeURIComponent(liveMid)}`}>Open full screen</a></div>
+    <${Live} key=${liveMid} m=${{ id: liveMid }} compact onDone=${() => { setStarted(null); refresh(); load(); }} />
+  </div>`;
+
+  return html`<div class="capture">
+    <div class="card recordcard">
+      ${rec ? html`<div class="busyrec"><i class="recdot pulse"></i> Recording in another project:
+          <a href=${`#/p/${encodeURIComponent(rec.pid)}/m/${encodeURIComponent(rec.mid)}`}>${rec.title}</a></div>` : html`
+        <div class="seg">${SOURCES.map((s) => html`<button class=${src === s.id ? "on" : ""} title=${s.sub} onClick=${() => setSrc(s.id)}>${s.short}</button>`)}</div>
+        <div class="hint" style="margin:6px 0 10px">${SOURCES.find((x) => x.id === src).sub}</div>
+        <input type="text" placeholder="Title (optional)" value=${title} onInput=${(e) => setTitle(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && start()} />
+        <button class="bigrec" disabled=${busy} onClick=${start}><i class="recdot"></i>${busy ? "Starting…" : "Start recording"}</button>
+        ${src !== "mic" ? html`<div class="hint">First time: macOS asks to allow system audio. Headphones avoid echo.</div>` : null}`}
+    </div>
+    <div class=${"card importcard" + (over ? " over" : "")}
       onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)}
       onDrop=${(e) => { e.preventDefault(); setOver(false); upload(e.dataTransfer.files); }}>
-      ${uploading ? html`Uploading ${uploading}…` : html`Drop audio or video files here, or
-        <button class="btn primary" onClick=${() => input.current.click()}>Import…</button>
-        <div style="font-size:12px;margin-top:6px">mp3, m4a, wav, flac, ogg, mp4, mov, webm… transcribed locally</div>`}
+      ${uploading ? html`<div>Uploading ${uploading}…</div>` : html`<div><b>Import</b></div>
+        <div class="hint" style="margin:4px 0 10px">Drop audio or video files here</div>
+        <button class="btn" onClick=${() => input.current.click()}>Choose files…</button>`}
       <input ref=${input} type="file" multiple accept="audio/*,video/*" hidden onChange=${(e) => { upload(e.target.files); e.target.value = ""; }} />
     </div>
-    ${p.meetings.length ? html`<div class="mlist">${p.meetings.map((m) => html`<${MeetingRow} p=${p} m=${m} job=${p.jobs[m.id]} />`)}</div>`
-      : html`<div class="empty">No recordings yet.</div>`}`;
-}
-
-const SOURCES = [
-  { id: "mic", mic: true, system: false, title: "Microphone", sub: "In-person meeting, lecture, class" },
-  { id: "both", mic: true, system: true, title: "Microphone + system audio", sub: "Online meeting: you on the mic, everyone else from Zoom, Teams, Meet…" },
-  { id: "system", mic: false, system: true, title: "System audio only", sub: "A webinar or video playing on this Mac" },
-];
-
-function RecordPanel({ p }) {
-  const [open, setOpen] = useState(false);
-  const [src, setSrc] = useState(() => { try { return localStorage.getItem("folio.source") || "mic"; } catch { return "mic"; } });
-  const [title, setTitle] = useState("");
-  const [busy, setBusy] = useState(false);
-  const start = async () => {
-    const s = SOURCES.find((x) => x.id === src);
-    try { localStorage.setItem("folio.source", src); } catch {}
-    setBusy(true);
-    try {
-      const simulate = new URLSearchParams(location.search).get("simulate");
-      const r = await api("/live/start", { json: { project: p.id, title, mic: s.mic, system: s.system, simulate } });
-      location.hash = `#/p/${encodeURIComponent(p.id)}/m/${encodeURIComponent(r.mid)}`;
-    } catch (e) { toast(e.message); setBusy(false); }
-  };
-  if (!open) return html`<div class="row" style="margin-bottom:12px">
-    <button class="btn rec" onClick=${() => setOpen(true)}><i class="recdot"></i>Record</button></div>`;
-  return html`<div class="card recpanel">
-    <div class="sources">${SOURCES.map((s) => html`<label class=${"src" + (src === s.id ? " on" : "")}>
-      <input type="radio" name="src" checked=${src === s.id} onChange=${() => setSrc(s.id)} />
-      <b>${s.title}</b><span>${s.sub}</span></label>`)}</div>
-    <div class="row" style="margin-top:12px">
-      <input type="text" style="flex:1" placeholder="Title (optional)" value=${title} onInput=${(e) => setTitle(e.target.value)}
-        onKeyDown=${(e) => e.key === "Enter" && start()} />
-      <button class="btn rec" disabled=${busy} onClick=${start}><i class="recdot"></i>Start recording</button>
-      <button class="btn" onClick=${() => setOpen(false)}>Cancel</button>
-    </div>
-    ${src !== "mic" ? html`<div class="hint">The first time, macOS asks to allow system audio recording. Headphones avoid echo; without them Folio removes what the mic picks up from the speakers.</div>` : null}
   </div>`;
 }
 
-function Live({ m, onDone }) {
+function Live({ m, onDone, compact }) {
   const [st, setSt] = useState(null);
   const [events, setEvents] = useState([]);
   const [stopping, setStopping] = useState(false);
@@ -480,7 +552,7 @@ function Live({ m, onDone }) {
       <button class="btn rec" disabled=${stopping || st?.stopping} onClick=${stop}>■ Stop</button>
     </div>
     ${st?.error ? html`<div class="hint err">${st.error}</div>` : null}
-    <div class="livetext" ref=${box} onScroll=${(e) => { const el = e.target; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
+    <div class=${"livetext" + (compact ? " compact" : "")} ref=${box} onScroll=${(e) => { const el = e.target; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
       ${!events.length && !st?.partials?.length ? html`<div class="empty">Listening… text appears as people speak.</div>` : null}
       ${events.map((e) => html`<p key=${e.seq}>${label(e.track) ? html`<b class=${"who-" + e.track}>${label(e.track)}</b>` : null}
         <span class="ts" style="display:inline;margin-right:8px">${clock(e.start)}</span>${e.text}</p>`)}
@@ -509,7 +581,13 @@ function Knowledge({ p, load }) {
     await api(`/projects/${encodeURIComponent(p.id)}`, { method: "PUT", json: { knowledge: k, glossary: g } });
     toast("Saved"); load();
   };
+  const setLocal = async (on) => {
+    await api(`/projects/${encodeURIComponent(p.id)}`, { method: "PUT", json: { localOnly: on } });
+    load();
+  };
   return html`<div class="knowledge">
+    <label class="row" style="font-weight:400"><input type="checkbox" checked=${!!p.localOnly} onChange=${(e) => setLocal(e.target.checked)} />
+      <span><b>Keep this project on this Mac.</b> Summaries, fixes and questions always use the local model, even when Claude is chosen in <a class="src-link" href="#/settings">Settings</a>.</span></label>
     <label>Project knowledge</label>
     <p>Goals, background, who's who, current status — anything the summary should know. Plain Markdown, stored as project.md.</p>
     <textarea rows="10" value=${k} onInput=${(e) => setK(e.target.value)}></textarea>
@@ -651,7 +729,8 @@ function Meeting({ pid, mid, at }) {
       ${m.hasAudio ? html`<audio ref=${audio} controls preload="metadata" src=${"/api" + base + "/audio"}></audio>` : null}
       <div class="row tools">
         ${m.job ? html`<span class="badge">${STEPS[m.job.step] || m.job.step}${m.job.progress ? ` ${Math.round(m.job.progress * 100)}%` : ""}</span>`
-          : m.status === "error" ? html`<span class="badge err">Failed: ${m.error}</span>` : null}
+          : m.status === "error" ? html`<span class="badge err">Failed: ${m.error}</span>`
+          : m.jobError ? html`<span class="badge err" title=${m.jobError}>${m.jobError.length > 90 ? m.jobError.slice(0, 90) + "…" : m.jobError}</span>` : null}
         <span class="spacer"></span>
         ${t ? html`<select disabled=${!!m.job} onChange=${(e) => { const v = e.target.value; e.target.value = ""; if (v) fix(v); }}>
           <option value="">Fix transcript…</option>
@@ -804,7 +883,7 @@ function Summary({ m, job, summarize, jump }) {
     ${done.length ? html`<h4>Done since earlier meetings</h4>${list(done, (x) => html`<li><s>${x.text}</s>${x.closedBy.note ? html` <small>${x.closedBy.note}</small>` : null}</li>`)}` : null}
     ${s.progress.length ? html`<h4>Progress</h4>${list(s.progress, (x) => html`<li><b>${x.area}</b>: ${x.update}</li>`)}` : null}
     ${s.open_questions.length ? html`<h4>Open questions</h4>${list(s.open_questions, (x) => html`<li>${x}</li>`)}` : null}
-    <div class="row hint" style="margin-top:18px">Written on this Mac by ${"Qwen3 8B"} using the project's knowledge, state, to-dos and earlier meetings.
+    <div class="row hint" style="margin-top:18px">Written by ${s.writer || "Qwen3 8B on this Mac"} using the project's knowledge, state, to-dos and earlier meetings.
       <span class="spacer"></span><button class="btn" disabled=${!!job} onClick=${summarize}>${running ? "Summarizing…" : "Summarize again"}</button></div>
   </div>`;
 }

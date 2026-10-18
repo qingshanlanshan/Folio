@@ -96,12 +96,14 @@ def get_project(pid: str) -> dict:
 
 
 def update_project(pid: str, name: str | None = None, knowledge: str | None = None,
-                   glossary: str | None = None) -> dict:
+                   glossary: str | None = None, local_only: bool | None = None) -> dict:
     d = project_dir(pid)
+    meta = read_json(d / "project.json")
     if name is not None and name.strip():
-        meta = read_json(d / "project.json")
         meta["name"] = name.strip()
-        write_json(d / "project.json", meta)
+    if local_only is not None:
+        meta["localOnly"] = local_only
+    write_json(d / "project.json", meta)
     if knowledge is not None:
         (d / "project.md").write_text(knowledge, "utf-8")
     if glossary is not None:

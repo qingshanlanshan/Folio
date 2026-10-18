@@ -11,9 +11,9 @@ import time
 import uuid
 
 from . import glossary, people, store, transcript
+from . import llm
 from .llm import chat, chat_json, count_tokens
 
-CHUNK_TOKENS = 9000
 
 
 def _clock(s: float) -> str:
@@ -116,12 +116,12 @@ def summarize(pid: str, mid: str, progress=lambda f: None) -> dict:
     ctx = _context(pid, mid, t)
     text = transcript_text(t)
     progress(0.05)
-    if count_tokens(text) > CHUNK_TOKENS:
+    if count_tokens(text) > llm.context_tokens():
         # Long meeting: notes per part, then minutes from the notes.
         lines, chunks, cur, n = text.split("\n"), [], [], 0
         for line in lines:
             k = len(line) // 4
-            if n + k > CHUNK_TOKENS * 0.8 and cur:
+            if n + k > llm.context_tokens() * 0.8 and cur:
                 chunks.append("\n".join(cur)); cur, n = [], 0
             cur.append(line); n += k
         if cur:
@@ -137,6 +137,7 @@ def summarize(pid: str, mid: str, progress=lambda f: None) -> dict:
     progress(0.75)
     s = _clean(s)
     s["at"] = time.time()
+    s["writer"] = llm.describe()
     store.write_json(d / "summary.json", s)
     m = store.read_json(d / "meeting.json")
     (d / "summary.md").write_text(render(s, m["title"]), "utf-8")
@@ -237,11 +238,14 @@ def ask(pid: str, question: str) -> dict:
             sums.append(f"- {m['title']} ({time.strftime('%d %b', time.localtime(m['date']))}): {s.get('overview', '')}")
     material = (f"Project state:\n{state(pid) or '(none)'}\n\nMeeting summaries (newest first):\n" + ("\n".join(sums) or "(none)")
                 + "\n\nPassages:\n" + "\n".join(f"[{h['title']}, {_clock(h['start'])}] {h['speaker']}: {h['snippet']}" for _, h in top))
-    answer = chat(ASK_SYSTEM, f"Project: {proj['name']}\n\n{material}\n\nQuestion: {question}", max_tokens=700).strip()
+    with llm.for_project(pid):
+        answer = chat(ASK_SYSTEM, f"Project: {proj['name']}\n\n{material}\n\nQuestion: {question}",
+                      max_tokens=700, effort="low").strip()
     return {"answer": answer, "sources": [{"meeting": h["meeting"], "title": h["title"], "start": h["start"]} for _, h in top]}
 
 
 def run(job: dict, key: str) -> None:
     from .jobs import set_step
     set_step(key, "summarizing")
-    summarize(job["pid"], job["mid"], lambda f: set_step(key, "summarizing", f))
+    with llm.for_project(job["pid"]):
+        summarize(job["pid"], job["mid"], lambda f: set_step(key, "summarizing", f))

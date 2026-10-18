@@ -1,10 +1,43 @@
-"""The local language model (Qwen3 8B, 4-bit, MLX) for corrections and summaries."""
+"""The language model for corrections, summaries and questions: Qwen3 8B on this Mac (default), or
+Claude when it's chosen in Settings and the project isn't marked "keep on this Mac"."""
 import json
 import re
 import threading
+from contextlib import contextmanager
 
-from . import runtime
+from . import runtime, store
 from .asr import GPU
+
+_project = threading.local()
+
+
+@contextmanager
+def for_project(pid: str):
+    """Calls inside this block follow that project's choice of engine."""
+    prev = getattr(_project, "pid", None)
+    _project.pid = pid
+    try:
+        yield
+    finally:
+        _project.pid = prev
+
+
+def engine() -> str:
+    if runtime.settings().get("aiEngine") != "claude":
+        return "local"
+    pid = getattr(_project, "pid", None)
+    if pid:
+        try:
+            if store.get_project(pid).get("localOnly"):
+                return "local"
+        except store.NotFound:
+            pass
+    return "claude"
+
+
+def describe() -> str:
+    from . import claude
+    return claude.name() if engine() == "claude" else "Qwen3 8B on this Mac"
 
 MODEL = "mlx-community/Qwen3-8B-4bit"
 _m = {}
@@ -20,7 +53,11 @@ def _model():
         return _m["m"]
 
 
-def chat(system: str, user: str, max_tokens: int = 2048, temp: float = 0.2) -> str:
+def chat(system: str, user: str, max_tokens: int = 2048, temp: float = 0.2, effort: str = "medium") -> str:
+    if engine() == "claude":
+        from . import claude
+        # Claude thinks before answering, and thinking counts toward max_tokens: leave room.
+        return claude.chat(system, user, max_tokens=max(16000, max_tokens * 4), effort=effort)
     from mlx_lm import stream_generate
     from mlx_lm.sample_utils import make_sampler
     model, tok = _model()
@@ -39,15 +76,22 @@ def chat(system: str, user: str, max_tokens: int = 2048, temp: float = 0.2) -> s
 
 
 def count_tokens(text: str) -> int:
+    if engine() == "claude":
+        return len(text) // 4          # rough is fine: Claude's context is far larger than a meeting
     return len(_model()[1].encode(text))
 
 
-def chat_json(system: str, user: str, max_tokens: int = 2048) -> dict:
+def context_tokens() -> int:
+    """How much transcript fits in one request before summarizing part by part."""
+    return 150_000 if engine() == "claude" else 9000
+
+
+def chat_json(system: str, user: str, max_tokens: int = 2048, effort: str = "medium") -> dict:
     """Asks for JSON and parses the first object in the reply; one retry with a nudge."""
     last = ""
     for attempt in range(2):
         out = chat(system, user if not attempt else user + "\n\nReply with valid JSON only.", max_tokens,
-                   temp=0.2 if not attempt else 0.0)
+                   temp=0.2 if not attempt else 0.0, effort=effort)
         last = out
         m = re.search(r"\{.*\}", out, re.S)
         if m:

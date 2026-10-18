@@ -244,6 +244,8 @@ def _worker() -> None:
                 store.update_meeting(job["pid"], job["mid"], status="processing")
             HANDLERS[job["kind"]](job, key)
             ok = True
+            if not main:
+                store.update_meeting(job["pid"], job["mid"], jobError="")
             if main:
                 store.update_meeting(job["pid"], job["mid"], status="ready", error="",
                                      processedIn=round(time.time() - t0, 1))

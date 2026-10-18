@@ -2,6 +2,7 @@
 parakeet-mlx==0.5.3
 mlx-whisper==0.4.3
 mlx-lm==0.32.2
+anthropic==1.15.0         # optional: Claude as the AI engine
 sherpa-onnx==1.13.8
 av==19.0.1
 numpy

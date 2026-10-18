@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import correct, jobs, live, people, runtime, search, store, summarize, transcript
+from . import claude, correct, jobs, live, people, runtime, search, store, summarize, transcript
 
 jobs.AFTER.append(people.match)
 jobs.HANDLERS["correct"] = correct.run
@@ -26,6 +26,11 @@ def _nf(request: Request, exc: store.NotFound):
     return JSONResponse({"detail": "not found"}, status_code=404)
 
 
+@app.exception_handler(claude.ClaudeError)
+def _claude_error(request: Request, exc: claude.ClaudeError):
+    return JSONResponse({"detail": str(exc)}, status_code=502)
+
+
 @app.on_event("startup")
 def _start():
     jobs.start()
@@ -38,6 +43,7 @@ class ProjectIn(BaseModel):
     name: str | None = None
     knowledge: str | None = None
     glossary: str | None = None
+    localOnly: bool | None = None
 
 
 @app.get("/api/projects")
@@ -121,7 +127,7 @@ def ask(pid: str, body: AskIn):
 
 @app.put("/api/projects/{pid}")
 def edit_project(pid: str, body: ProjectIn):
-    return store.update_project(pid, body.name, body.knowledge, body.glossary)
+    return store.update_project(pid, body.name, body.knowledge, body.glossary, body.localOnly)
 
 
 @app.delete("/api/projects/{pid}")
@@ -475,11 +481,50 @@ def unload_models(body: UnloadIn):
 class SettingsIn(BaseModel):
     autoUnloadMinutes: int | None = None
     notifications: bool | None = None
+    aiEngine: str | None = None          # "local" | "claude"
+    claudeModel: str | None = None
+
+
+@app.get("/api/settings")
+def get_settings():
+    month = claude.usage()["months"].get(time.strftime("%Y-%m"), {"requests": 0, "usd": 0.0})
+    return {**runtime.settings(), "claudeKey": claude.key_status(), "claudeModels":
+            [{"id": k, "name": v[0], "in": v[1], "out": v[2]} for k, v in claude.MODELS.items()],
+            "claudeUsage": {"month": month, "all": claude.usage()["months"]}}
 
 
 @app.put("/api/settings")
 def edit_settings(body: SettingsIn):
-    return runtime.save_settings(**body.model_dump())
+    if body.aiEngine not in (None, "local", "claude") or (body.claudeModel and body.claudeModel not in claude.MODELS):
+        raise HTTPException(400, "setting")
+    runtime.save_settings(**body.model_dump())
+    return get_settings()
+
+
+class KeyIn(BaseModel):
+    key: str = ""
+
+
+@app.put("/api/settings/claude-key")
+def set_claude_key(body: KeyIn):
+    k = body.key.strip()
+    if not k:
+        claude.delete_key()
+    elif not k.startswith("sk-ant-") or len(k) < 30:
+        raise HTTPException(400, "That doesn't look like an Anthropic API key (they start with sk-ant-).")
+    else:
+        claude.save_key(k)
+    return get_settings()
+
+
+@app.post("/api/settings/claude-test")
+def test_claude():
+    if not claude.key_status():
+        raise HTTPException(409, "Add an API key first.")
+    try:
+        return claude.test()
+    except claude.ClaudeError as e:
+        raise HTTPException(502, str(e))
 
 
 class QuitIn(BaseModel):
