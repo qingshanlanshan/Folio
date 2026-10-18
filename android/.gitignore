@@ -16,3 +16,4 @@ site/public/_redirects
 site/.wrangler/
 site/.npm-cache/
 site/Folio-speedtest.apk
+site/Folio-*.apk
