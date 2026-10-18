@@ -76,19 +76,28 @@ function App() {
   }, []);
   const mid = route[2] === "m" ? route[3] : null;
 
+  const home = !route[0] && !route.query.get("project");
   return html`<div class="layout">
     <${Sidebar} projects=${projects} pid=${pid} route=${route} reload=${reload} />
     <main>
-      ${mid ? html`<${Meeting} key=${pid + "/" + mid} pid=${pid} mid=${mid} at=${Number(route.query.get("t")) || null} />`
+      ${home ? null : html`<div class="backbar"><button class="back" onClick=${goBack}>← Back</button></div>`}
+      ${mid ? html`<${Meeting} key=${pid + "/" + mid} pid=${pid} mid=${mid} at=${Number(route.query.get("t")) || null} projects=${projects} reloadProjects=${reload} />`
         : pid ? html`<${Project} key=${pid} pid=${pid} reloadProjects=${reload} />`
         : route[0] === "people" && route[1] ? html`<${Person} key=${route[1]} id=${route[1]} projects=${projects} />`
         : route[0] === "people" ? html`<${People} />`
         : route[0] === "search" ? html`<${Search} key=${route[1]} q=${route[1] || ""} />`
         : route[0] === "activity" ? html`<${Activity} />`
         : route[0] === "settings" ? html`<${Settings} />`
-        : html`<${Home} projects=${projects} />`}
+        : html`<${RecordPage} projects=${projects} preset=${route.query.get("project")} reloadProjects=${reload} />`}
     </main>
   </div>`;
+}
+
+// Back goes to the previous page; opened directly, it goes to the recorder.
+const startLength = history.length;
+function goBack() {
+  if (history.length > startLength || document.referrer.startsWith(location.origin)) history.back();
+  else location.hash = "#/";
 }
 
 function Sidebar({ projects, pid, route, reload }) {
@@ -113,10 +122,13 @@ function Sidebar({ projects, pid, route, reload }) {
     <form onSubmit=${(e) => { e.preventDefault(); if (q.trim()) location.hash = "#/search/" + encodeURIComponent(q.trim()); }}>
       <input type="search" placeholder="Search words or names" value=${q} onInput=${(e) => setQ(e.target.value)} />
     </form>
+    <a class=${"plink rec-link" + (!route[0] ? " on" : "")} href="#/"><span><i class="recdot"></i> Record</span></a>
+    ${(projects || []).filter((p) => p.builtin).map((p) => html`<a class=${"plink" + (p.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(p.id)}>
+      <span>Unsorted</span><small>${p.meetings || ""}</small></a>`)}
     <a class=${"plink" + (route[0] === "people" ? " on" : "")} href="#/people"><span>People</span></a>
     <a class=${"plink" + (route[0] === "settings" ? " on" : "")} href="#/settings"><span>Settings</span></a>
     <h4>Projects</h4>
-    ${(projects || []).map((p) => html`<a class=${"plink" + (p.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(p.id)}>
+    ${(projects || []).filter((p) => !p.builtin).map((p) => html`<a class=${"plink" + (p.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(p.id)}>
       <span>${p.name}</span><small>${p.meetings || ""}</small></a>`)}
     ${adding
       ? html`<form onSubmit=${create}><${FocusInput} placeholder="Project or course name" value=${name}
@@ -319,23 +331,35 @@ function Settings() {
   </div>`;
 }
 
-function Home({ projects }) {
-  return html`<div class="page">
-    <h1>Folio</h1>
-    <div class="sub">Local meeting and lecture transcripts, organised by project. Nothing leaves this Mac.</div>
-    ${projects && !projects.length
-      ? html`<div class="empty">Create a project (a research group, a course, a client…) in the sidebar, then import recordings into it.</div>`
-      : html`<div class="mlist">${(projects || []).map((p) => html`<a class="mrow" href=${"#/p/" + encodeURIComponent(p.id)}>
-          <span class="t">${p.name}</span><span class="m">${p.meetings} recording${p.meetings === 1 ? "" : "s"}</span></a>`)}</div>`}
-  </div>`;
-}
-
 // ---------- project
+
+function useUpload(pid, load) {
+  const [uploading, setUploading] = useState(0);
+  const upload = async (files) => {
+    files = [...files];
+    setUploading((n) => n + files.length);
+    for (const f of files) {
+      const fd = new FormData();
+      fd.append("file", f);
+      fd.append("date", String((f.lastModified || Date.now()) / 1000));
+      try {
+        const r = await fetch(`/api/projects/${encodeURIComponent(pid)}/import`, { method: "POST", body: fd });
+        if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+      } catch (e) { toast(`${f.name}: ${e.message}`); }
+      setUploading((n) => n - 1);
+      load && load();
+    }
+  };
+  return [uploading, upload];
+}
 
 function Project({ pid, reloadProjects }) {
   const [p, setP] = useState(null);
   const [tab, setTab] = useState("overview");
+  const [over, setOver] = useState(false);
+  const input = useRef();
   const load = useCallback(() => api(`/projects/${encodeURIComponent(pid)}`).then(setP).catch((e) => toast(e.message)), [pid]);
+  const [uploading, upload] = useUpload(pid, load);
   useEffect(() => { load(); }, [load]);
   const busy = p && (Object.keys(p.jobs).length || p.meetings.some((m) => m.status === "queued" || m.status === "processing"));
   useEffect(() => {
@@ -351,22 +375,37 @@ function Project({ pid, reloadProjects }) {
       load(); reloadProjects();
     }
   };
-  return html`<div class="page">
-    <div class="crumb"><a href="#/">Projects</a></div>
-    <h1><input value=${p.name} onChange=${(e) => rename(e.target.value)} /></h1>
-    <div class="sub">${p.meetings.length} recording${p.meetings.length === 1 ? "" : "s"}</div>
-    <${Capture} p=${p} load=${load} />
+  const remove = async () => {
+    const n = p.meetings.length;
+    if (!confirm(`Delete the project “${p.name}”${n ? ` and its ${n} recording${n === 1 ? "" : "s"}` : ""}? Everything moves to the macOS Trash, so you can still restore it from there.`)) return;
+    try { await api(`/projects/${encodeURIComponent(pid)}`, { method: "DELETE" }); reloadProjects(); location.hash = "#/"; } catch (e) { toast(e.message); }
+  };
+  const actions = html`<div class="row headactions">
+    <a class="btn rec" href=${"#/?project=" + encodeURIComponent(pid)}><i class="recdot"></i>New recording</a>
+    <button class="btn" onClick=${() => input.current.click()}>${uploading ? `Uploading ${uploading}…` : "Import files"}</button>
+    ${p.builtin ? null : html`<button class="btn danger" onClick=${remove}>Delete project</button>`}
+    <input ref=${input} type="file" multiple accept="audio/*,video/*" hidden onChange=${(e) => { upload(e.target.files); e.target.value = ""; }} />
+  </div>`;
+  return html`<div class=${"page" + (over ? " dropping" : "")}
+      onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${(e) => { if (e.currentTarget === e.target) setOver(false); }}
+      onDrop=${(e) => { e.preventDefault(); setOver(false); upload(e.dataTransfer.files); }}>
+    <div class="headrow">
+      ${p.builtin ? html`<h1>Unsorted</h1>` : html`<h1><input value=${p.name} onChange=${(e) => rename(e.target.value)} title="Click to rename" /></h1>`}
+      ${actions}
+    </div>
+    <div class="sub">${p.builtin ? "Recordings not filed in a project yet. Move each one to a project to summarize it with that project's context." : `${p.meetings.length} recording${p.meetings.length === 1 ? "" : "s"} · drop audio or video files anywhere here to import`}</div>
+    ${p.builtin ? html`<${Meetings} p=${p} load=${load} />` : html`
     <div class="tabs">
       <button class=${tab === "overview" ? "on" : ""} onClick=${() => setTab("overview")}>Overview</button>
       <button class=${tab === "meetings" ? "on" : ""} onClick=${() => setTab("meetings")}>Recordings</button>
       <button class=${tab === "knowledge" ? "on" : ""} onClick=${() => setTab("knowledge")}>Knowledge & glossary</button>
     </div>
-    ${tab === "overview" ? html`<${Overview} p=${p} setP=${setP} goRecordings=${() => setTab("meetings")} />`
-      : tab === "meetings" ? html`<${Meetings} p=${p} />` : html`<${Knowledge} p=${p} load=${load} />`}
+    ${tab === "overview" ? html`<${Overview} p=${p} setP=${setP} load=${load} />`
+      : tab === "meetings" ? html`<${Meetings} p=${p} load=${load} />` : html`<${Knowledge} p=${p} load=${load} />`}`}
   </div>`;
 }
 
-function Overview({ p, setP, goRecordings }) {
+function Overview({ p, setP, load }) {
   const base = `/projects/${encodeURIComponent(p.id)}`;
   const [q, setQ] = useState("");
   const [ans, setAns] = useState(null);
@@ -399,7 +438,9 @@ function Overview({ p, setP, goRecordings }) {
       return meet ? html`<a class="cite" href=${`#/p/${encodeURIComponent(p.id)}/m/${encodeURIComponent(meet.id)}?t=${Number(mm[2]) * 60 + Number(mm[3])}`}>${mm[1]}, ${mm[2]}:${mm[3]}</a>` : part;
     });
   };
-  if (!p.meetings.length) return html`<div class="empty">Record or import the first meeting above — the overview, to-dos and project state build up from there.</div>`;
+  if (!p.meetings.length) return html`<div class="cols">
+    <section><div class="empty">Record or import the first meeting — the summary of where things stand and the to-dos build up from there.</div></section>
+    <section><${PeoplePanel} p=${p} setP=${setP} /></section></div>`;
   return html`
     <form class="ask" onSubmit=${ask}>
       <input type="text" placeholder="Ask this project… e.g. “What did we decide about the battery?”" value=${q} onInput=${(e) => setQ(e.target.value)} />
@@ -411,9 +452,7 @@ function Overview({ p, setP, goRecordings }) {
     <div class="cols">
       <section>
         <${StateSection} p=${p} setP=${setP} base=${base} />
-      </section>
-      <section>
-        <h3>To-dos <small style="font-weight:400;color:var(--muted)">${open.length} open</small></h3>
+        <h3 style="margin-top:28px">To-dos <small style="font-weight:400;color:var(--muted)">${open.length} open</small></h3>
         <div class="todos">${open.map((x) => html`<label class="todo">
           <input type="checkbox" onChange=${() => todo(x.id, { status: "done" })} />
           <span>${x.text}${x.owner ? html` <span class="owner">${x.owner}</span>` : null}${x.due ? html` <small>due ${x.due}</small>` : null}
@@ -425,10 +464,41 @@ function Overview({ p, setP, goRecordings }) {
           <input type="checkbox" checked onChange=${() => todo(x.id, { status: "open" })} />
           <span><s>${x.text}</s>${x.closedBy?.meeting ? html`<small> · closed in ${link(x.closedBy.meeting)}</small>` : null}</span></label>`)}</div>` : null}
       </section>
+      <section><${PeoplePanel} p=${p} setP=${setP} /></section>
     </div>
 
     <h3>Recent meetings</h3>
     <div class="mlist">${p.meetings.slice(0, 5).map((m) => html`<${MeetingRow} p=${p} m=${m} job=${p.jobs[m.id]} />`)}</div>`;
+}
+
+// The project's people: who's in it (their notes help summaries; their voices are recognised).
+function PeoplePanel({ p, setP }) {
+  const [all, setAll] = useState(null);
+  const [q, setQ] = useState("");
+  const base = `/projects/${encodeURIComponent(p.id)}/people`;
+  useEffect(() => { api("/people").then(setAll); }, [p.people.length]);
+  const members = new Set(p.people.map((x) => x.id));
+  const ql = q.trim().toLowerCase();
+  const matches = ql ? (all || []).filter((x) => !members.has(x.id) && x.name.toLowerCase().includes(ql)).slice(0, 5) : [];
+  const exact = (all || []).some((x) => x.name.toLowerCase() === ql);
+  const add = async (body) => { try { setP({ ...(await api(base, { json: body })), jobs: p.jobs }); setQ(""); } catch (e) { toast(e.message); } };
+  const remove = async (x) => {
+    if (!confirm(`Remove ${x.name} from this project? They stay in People and in recordings.`)) return;
+    setP({ ...(await api(`${base}/${encodeURIComponent(x.id)}`, { method: "DELETE" })), jobs: p.jobs });
+  };
+  return html`<h3>People <small style="font-weight:400;color:var(--muted)">${p.people.length}</small></h3>
+    <div class="members">${p.people.map((x) => html`<div class="member">
+      <a href=${"#/people/" + encodeURIComponent(x.id)} class="row" style="flex:1;gap:8px">
+        <span class="avatar">${initials(x.name)}</span>
+        <span><b>${x.name}</b>${x.me ? html` <small>(me)</small>` : null}<br /><small>${x.notes ? x.notes.slice(0, 70) : x.voiceCount ? "voice known" : "no notes yet"}</small></span></a>
+      <button class="iconbtn" title="Remove from project" onClick=${() => remove(x)}>×</button></div>`)}
+      ${!p.people.length ? html`<div class="hint">Add the people in this project. Naming a speaker in a recording adds them too.</div>` : null}
+    </div>
+    <form class="row" style="margin-top:8px" onSubmit=${(e) => { e.preventDefault(); if (matches.length === 1) add({ person: matches[0].id }); else if (ql && !exact) add({ name: q.trim() }); }}>
+      <input type="text" style="flex:1" placeholder="Add a person…" value=${q} onInput=${(e) => setQ(e.target.value)} />
+    </form>
+    ${ql ? html`<div class="suggest">${matches.map((x) => html`<div class="mi" onClick=${() => add({ person: x.id })}><span class="avatar">${initials(x.name)}</span>${x.name}</div>`)}
+      ${!exact ? html`<div class="mi" onClick=${() => add({ name: q.trim() })}><span class="avatar new">+</span>New person “${q.trim()}”</div>` : null}</div>` : null}`;
 }
 
 // "Where things stand": AI-maintained after each meeting; you can edit it, tell it what changed,
@@ -454,32 +524,37 @@ function StateSection({ p, setP, base }) {
     if (!confirm("Go back to this version? The current one is kept in the history too.")) return;
     keepJobs(await api(base + "/state/restore", { json: { file } })); setMode(null);
   };
+  const bar = !mode && !job ? html`<div class="statebar">
+      <button class="linkbtn" onClick=${() => { setText(p.state); setMode("edit"); }}>✎ Edit text</button>
+      <button class="linkbtn" onClick=${() => setMode("note")}>Tell the AI what changed</button>
+      <button class="linkbtn" onClick=${() => setMode("rebuild")}>Rewrite from all recordings</button>
+      <button class="linkbtn" onClick=${showHistory}>Earlier versions</button>
+    </div>` : null;
   return html`
-    <div class="row"><h3>Where things stand</h3><span class="spacer"></span>
-      ${!mode && !job ? html`
-        <button class="btn" onClick=${() => { setText(p.state); setMode("edit"); }}>Edit</button>
-        <button class="btn" onClick=${() => setMode("update")}>Update…</button>
-        <button class="btn" onClick=${showHistory}>History</button>` : null}</div>
+    <h3>Project summary</h3>
+    <div class="hint" style="margin:-4px 0 8px">Where things stand. The AI updates it after each recording is summarized.</div>
 
     ${job ? html`<div class="card"><span class="badge">${job.step === "queued" ? "Waiting" : "Updating"}${job.progress ? " " + Math.round(job.progress * 100) + "%" : ""}</span>
-      <span class="hint"> Rewriting the project state…</span></div>` : null}
+      <span class="hint"> Rewriting the project summary…</span></div>` : null}
     ${p.stateError && !job ? html`<div class="hint errtext">Last update failed: ${p.stateError}</div>` : null}
 
     ${mode === "edit" ? html`<textarea rows="16" value=${text} onInput=${(e) => setText(e.target.value)}></textarea>
       <div class="row" style="margin-top:8px"><button class="btn primary" onClick=${save}>Save</button>
       <button class="btn" onClick=${() => setMode(null)}>Cancel</button></div>`
 
-    : mode === "update" ? html`<div class="card">
-      <label style="font-weight:600">What changed?</label>
-      <textarea rows="4" placeholder="e.g. We dropped the hardware prototype and now focus on the app; the deadline moved to March."
+    : mode === "note" || mode === "rebuild" ? html`<div class="card">
+      <b>${mode === "note" ? "What changed?" : "Rewrite from all recordings"}</b>
+      <div class="hint" style="margin:4px 0 8px">${mode === "note"
+        ? "The AI revises the summary with your note; your note wins where it disagrees. Quick."
+        : "The AI writes the summary again from every recording's summary (oldest first) and the project knowledge. Use it after a big change of aim or context. A note is optional."}</div>
+      <textarea rows="4" placeholder=${mode === "note" ? "e.g. We dropped the hardware prototype and now focus on the app; the deadline moved to March." : "Optional: what changed"}
         value=${note} onInput=${(e) => setNote(e.target.value)}></textarea>
       <label class="checkline"><input type="checkbox" checked=${toKnowledge} onChange=${(e) => setToKnowledge(e.target.checked)} />
-        <span>Also add this note to the project knowledge, so future summaries know</span></label>
+        <span>Also add the note to the project knowledge, so future summaries know</span></label>
       <div class="row" style="margin-top:10px">
-        <button class="btn primary" disabled=${!note.trim()} onClick=${() => update("note")}>Update with this note</button>
-        <button class="btn" onClick=${() => update("rebuild")}>Rebuild from all meetings</button>
-        <button class="btn" onClick=${() => setMode(null)}>Cancel</button></div>
-      <div class="hint">“Update” revises the current state with your note (quick). “Rebuild” writes it again from every meeting's summary, oldest first, plus the project knowledge and your note, if any — use it after a big change of aim or context. Either way the old version stays in History.</div>
+        <button class="btn primary" disabled=${mode === "note" && !note.trim()} onClick=${() => update(mode === "note" ? "note" : "rebuild")}>${mode === "note" ? "Update summary" : "Rewrite summary"}</button>
+        <button class="btn" onClick=${() => setMode(null)}>Cancel</button>
+        <span class="hint" style="margin:0">The current version is kept under Earlier versions.</span></div>
     </div>`
 
     : mode === "history" ? html`<div class="card">
@@ -488,89 +563,178 @@ function StateSection({ p, setP, base }) {
         : history.map((v) => html`<div class="histrow">
           <div class="row"><span class="link" onClick=${() => setOpen(open === v.file ? null : v.file)}>${when(v.at)}</span>
             <small class="m">${v.reason}</small><span class="spacer"></span>
-            <button class="btn" onClick=${() => restore(v.file)}>Restore</button></div>
+            <button class="btn" onClick=${() => restore(v.file)}>Use this version</button></div>
           ${open === v.file ? html`<div class="state small" dangerouslySetInnerHTML=${{ __html: md(v.text) }}></div>` : null}
         </div>`)}
     </div>`
 
     : p.state ? html`<div class="state" dangerouslySetInnerHTML=${{ __html: md(p.state) }}></div>
-        ${p.stateUpdated ? html`<div class="hint">Updated ${when(p.stateUpdated.at)} ${p.stateUpdated.reason}</div>` : null}`
-    : html`<div class="hint">Written by the AI after each meeting is summarized, and kept up to date. You can edit it, or use Update… to describe the project yourself.</div>`}`;
+        ${p.stateUpdated ? html`<div class="hint">Last updated ${when(p.stateUpdated.at)} · ${p.stateUpdated.reason}</div>` : null}${bar}`
+    : html`<div class="hint">Nothing yet: it's written after the first recording is summarized. You can also describe the project yourself.</div>${bar}`}`;
 }
 
-function Meetings({ p }) {
-  return p.meetings.length ? html`<div class="mlist">${p.meetings.map((m) => html`<${MeetingRow} p=${p} m=${m} job=${p.jobs[m.id]} />`)}</div>`
-    : html`<div class="empty">No recordings yet. Record or import one above.</div>`;
+function Meetings({ p, load }) {
+  const [projects, setProjects] = useState([]);
+  useEffect(() => { api("/projects").then(setProjects); }, []);
+  if (!p.meetings.length) return html`<div class="empty">No recordings yet. Use New recording or Import files above.</div>`;
+  const base = (m) => `/projects/${encodeURIComponent(p.id)}/meetings/${encodeURIComponent(m.id)}`;
+  const move = async (m, to) => {
+    if (!to) return;
+    try { await api(base(m) + "/move", { json: { to } }); toast(to === "_unsorted" ? "Moved to Unsorted" : "Moved — summarizing it with that project's context"); load(); }
+    catch (e) { toast(e.message); }
+  };
+  const remove = async (m) => {
+    if (!confirm(`Delete “${m.title}”? It moves to the macOS Trash.`)) return;
+    try { await api(base(m), { method: "DELETE" }); load(); } catch (e) { toast(e.message); }
+  };
+  return html`<div class="mlist">${p.meetings.map((m) => html`<div class="mrowwrap">
+    <${MeetingRow} p=${p} m=${m} job=${p.jobs[m.id]} />
+    <div class="rowactions">
+      <select title="Move to another project" value="" onChange=${(e) => move(m, e.target.value)} disabled=${!!p.jobs[m.id]}>
+        <option value="">${p.builtin ? "Move to project…" : "Move…"}</option>
+        ${projects.filter((x) => x.id !== p.id).map((x) => html`<option value=${x.id}>${x.builtin ? "Unsorted" : x.name}</option>`)}
+      </select>
+      <button class="iconbtn" title="Delete recording" onClick=${() => remove(m)}>🗑</button>
+    </div></div>`)}</div>`;
 }
 
 const SOURCES = [
   { id: "mic", mic: true, system: false, short: "Microphone", sub: "In-person meeting, lecture or class" },
-  { id: "both", mic: true, system: true, short: "Online meeting", sub: "You on the mic, everyone else from Zoom, Teams, Meet… (mic + system audio)" },
-  { id: "system", mic: false, system: true, short: "Computer audio", sub: "A webinar or video playing on this Mac (system audio only)" },
+  { id: "both", mic: true, system: true, short: "Online meeting", sub: "You on the mic, others from Zoom, Teams, Meet…" },
+  { id: "system", mic: false, system: true, short: "Computer audio", sub: "A webinar or video playing on this Mac" },
 ];
 
-function Capture({ p, load }) {
-  const [st, refresh] = useStatus();
+// The home page: record now, file it in a project before, during or after (or leave it Unsorted).
+function RecordPage({ projects, preset, reloadProjects }) {
   const [src, setSrc] = useState(() => { try { return localStorage.getItem("folio.source") || "mic"; } catch { return "mic"; } });
+  const [target, setTarget] = useState(preset || "_unsorted");
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
-  const [started, setStarted] = useState(null);    // mid of a recording started here, until status catches up
-  const [over, setOver] = useState(false);
-  const [uploading, setUploading] = useState(0);
-  const input = useRef();
-  const rec = st?.recording;
-  const liveMid = rec && rec.pid === p.id ? rec.mid : started;
+  const [live, setLive] = useState(null);           // /api/live state while recording
+  const [events, setEvents] = useState([]);
+  const [last, setLast] = useState(null);           // {pid, mid} of the recording just finished
+  const [lastMeta, setLastMeta] = useState(null);
+  const box = useRef();
+  const stick = useRef(true);
+  useEffect(() => { if (preset) setTarget(preset); }, [preset]);
+
+  // Follow a recording in progress (also one started from another window).
+  useEffect(() => {
+    let since = 0, alive = true, timer, mid = null;
+    const poll = async () => {
+      try {
+        const s = await api(`/live?since=${since}`);
+        if (!alive) return;
+        if (s && !s.done) {
+          if (s.mid !== mid) { mid = s.mid; since = 0; setEvents([]); }
+          if (s.events.length) { since += s.events.length; setEvents((e) => [...e, ...s.events]); }
+          setLive(s); setTarget(s.target);
+        } else {
+          if (mid && s && s.done) { setLast({ pid: s.pid, mid: s.mid }); reloadProjects(); }
+          if (mid) { mid = null; setLive(null); }
+        }
+      } catch {}
+      timer = setTimeout(poll, mid ? 500 : 2000);
+    };
+    poll();
+    return () => { alive = false; clearTimeout(timer); };
+  }, []);
+  useEffect(() => { if (stick.current && box.current) box.current.scrollTop = box.current.scrollHeight; }, [events, live]);
+
+  // The finished recording: follow its processing.
+  useEffect(() => {
+    if (!last) return;
+    let alive = true, timer;
+    const poll = async () => {
+      try {
+        const m = await api(`/projects/${encodeURIComponent(last.pid)}/meetings/${encodeURIComponent(last.mid)}`);
+        if (!alive) return;
+        setLastMeta(m);
+        if (m.job || m.status === "queued" || m.status === "processing") timer = setTimeout(poll, 2000);
+      } catch { setLastMeta(null); }
+    };
+    poll();
+    return () => { alive = false; clearTimeout(timer); };
+  }, [last?.pid, last?.mid]);
 
   const start = async () => {
     const s = SOURCES.find((x) => x.id === src);
     try { localStorage.setItem("folio.source", src); } catch {}
-    setBusy(true);
+    setBusy(true); setLast(null); setLastMeta(null);
     try {
       const simulate = new URLSearchParams(location.search).get("simulate");
-      const r = await api("/live/start", { json: { project: p.id, title, mic: s.mic, system: s.system, simulate } });
-      setStarted(r.mid); setTitle(""); refresh(); load();
+      const r = await api("/live/start", { json: { project: target, title, mic: s.mic, system: s.system, simulate } });
+      setLive(r); setEvents([]); setTitle("");
     } catch (e) { toast(e.message); }
     setBusy(false);
   };
-  const upload = async (files) => {
-    files = [...files];
-    setUploading((n) => n + files.length);
-    for (const f of files) {
-      const fd = new FormData();
-      fd.append("file", f);
-      fd.append("date", String((f.lastModified || Date.now()) / 1000));
+  const stop = async () => { try { await api("/live/stop", { json: {} }); setLive((l) => l && { ...l, stopping: true }); } catch (e) { toast(e.message); } };
+  const choose = async (pid) => {
+    setTarget(pid);
+    if (live && !live.done) { try { await api("/live", { method: "PATCH", json: { project: pid } }); } catch (e) { toast(e.message); } }
+    else if (last) {
       try {
-        const r = await fetch(`/api/projects/${encodeURIComponent(p.id)}/import`, { method: "POST", body: fd });
-        if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-      } catch (e) { toast(`${f.name}: ${e.message}`); }
-      setUploading((n) => n - 1);
-      load();
+        const r = await api(`/projects/${encodeURIComponent(last.pid)}/meetings/${encodeURIComponent(last.mid)}/move`, { json: { to: pid } });
+        setLast({ pid: r.project, mid: r.meeting }); reloadProjects();
+        toast(pid === "_unsorted" ? "Moved to Unsorted" : "Filed in the project");
+      } catch (e) { toast(e.message); }
     }
   };
+  const recording = live && !live.done;
+  const both = live && live.tracks.length === 2;
+  const label = (tr) => (both ? (tr === "mic" ? "You" : "Others") : null);
+  const name = (pid) => pid === "_unsorted" ? "Unsorted" : (projects || []).find((x) => x.id === pid)?.name || pid;
+  const lastStatus = lastMeta && (lastMeta.job ? (STEPS[lastMeta.job.step] || lastMeta.job.step) + (lastMeta.job.progress ? ` ${Math.round(lastMeta.job.progress * 100)}%` : "")
+    : lastMeta.status === "ready" ? "Ready" : lastMeta.status === "error" ? "Failed: " + lastMeta.error : STEPS[lastMeta.status] || lastMeta.status);
 
-  if (liveMid) return html`<div class="card livecard">
-    <div class="row"><b>${p.meetings.find((m) => m.id === liveMid)?.title || rec?.title || "Recording"}</b><span class="spacer"></span>
-      <a class="hint" style="margin:0" href=${`#/p/${encodeURIComponent(p.id)}/m/${encodeURIComponent(liveMid)}`}>Open full screen</a></div>
-    <${Live} key=${liveMid} m=${{ id: liveMid }} compact onDone=${() => { setStarted(null); refresh(); load(); }} />
-  </div>`;
-
-  return html`<div class="capture">
-    <div class="card recordcard">
-      ${rec ? html`<div class="busyrec"><i class="recdot pulse"></i> Recording in another project:
-          <a href=${`#/p/${encodeURIComponent(rec.pid)}/m/${encodeURIComponent(rec.mid)}`}>${rec.title}</a></div>` : html`
-        <div class="seg">${SOURCES.map((s) => html`<button class=${src === s.id ? "on" : ""} title=${s.sub} onClick=${() => setSrc(s.id)}>${s.short}</button>`)}</div>
-        <div class="hint" style="margin:6px 0 10px">${SOURCES.find((x) => x.id === src).sub}</div>
-        <input type="text" placeholder="Title (optional)" value=${title} onInput=${(e) => setTitle(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && start()} />
-        <button class="bigrec" disabled=${busy} onClick=${start}><i class="recdot"></i>${busy ? "Starting…" : "Start recording"}</button>
-        ${src !== "mic" ? html`<div class="hint">First time: macOS asks to allow system audio. Headphones avoid echo.</div>` : null}`}
+  return html`<div class="recpage">
+    <div class="recmain" ref=${box} onScroll=${(e) => { const el = e.target; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
+      ${recording ? html`
+        <div class="livetext big">
+          ${!events.length && !live.partials?.length ? html`<div class="empty">Listening… text appears as people speak.</div>` : null}
+          ${events.map((e) => html`<p key=${e.seq}>${label(e.track) ? html`<b class=${"who-" + e.track}>${label(e.track)}</b>` : null}
+            <span class="ts" style="display:inline;margin-right:8px">${clock(e.start)}</span>${e.text}</p>`)}
+          ${(live.partials || []).map((pt) => html`<p class="partial">${label(pt.track) ? html`<b class=${"who-" + pt.track}>${label(pt.track)}</b>` : null}${pt.text}</p>`)}
+        </div>
+        ${live.error ? html`<div class="hint err">${live.error}</div>` : null}`
+      : last ? html`<div class="card lastrec">
+          <div class="row"><b>${lastMeta?.title || "Recording"}</b><span class="spacer"></span>
+            <a class="btn primary" href=${`#/p/${encodeURIComponent(last.pid)}/m/${encodeURIComponent(last.mid)}`}>Open</a></div>
+          <div class="hint">Saved in ${name(last.pid)} · ${lastStatus || "…"}</div>
+          <div class="hint">You can still change where it's filed with “Save to” below.</div>
+        </div>`
+      : html`<div class="recintro">
+          <h1>Record</h1>
+          <p class="sub">Press the button to start. Choose a project now or later, or leave it in Unsorted. Text appears as people speak; when you stop, Folio transcribes it again with speakers and writes a summary.</p>
+        </div>`}
     </div>
-    <div class=${"card importcard" + (over ? " over" : "")}
-      onDragOver=${(e) => { e.preventDefault(); setOver(true); }} onDragLeave=${() => setOver(false)}
-      onDrop=${(e) => { e.preventDefault(); setOver(false); upload(e.dataTransfer.files); }}>
-      ${uploading ? html`<div>Uploading ${uploading}…</div>` : html`<div><b>Import</b></div>
-        <div class="hint" style="margin:4px 0 10px">Drop audio or video files here</div>
-        <button class="btn" onClick=${() => input.current.click()}>Choose files…</button>`}
-      <input ref=${input} type="file" multiple accept="audio/*,video/*" hidden onChange=${(e) => { upload(e.target.files); e.target.value = ""; }} />
+
+    <div class="recpanel">
+      <div class="recopts">
+        <label class="fld"><span>Save to</span>
+          <select value=${target} onChange=${(e) => choose(e.target.value)} disabled=${busy || live?.stopping}>
+            <option value="_unsorted">Unsorted</option>
+            ${(projects || []).filter((x) => !x.builtin).map((x) => html`<option value=${x.id}>${x.name}</option>`)}
+          </select></label>
+        <label class="fld"><span>Source</span>
+          <select value=${src} onChange=${(e) => setSrc(e.target.value)} disabled=${recording}>
+            ${SOURCES.map((x) => html`<option value=${x.id}>${x.short}</option>`)}
+          </select></label>
+        <label class="fld grow"><span>Title</span>
+          <input type="text" placeholder=${recording ? live.title : "Optional — the summary names it otherwise"} value=${title} disabled=${recording}
+            onInput=${(e) => setTitle(e.target.value)} onKeyDown=${(e) => e.key === "Enter" && !recording && start()} /></label>
+      </div>
+      <div class="recbutton">
+        ${recording ? html`
+          <div class="timer"><i class="recdot pulse"></i>${live.stopping ? "Saving…" : clock(live.elapsed)}</div>
+          <button class="roundbtn stop" disabled=${live.stopping} onClick=${stop} title="Stop"><i></i></button>
+          <div class="meters">${live.tracks.map((tr) => html`<span class="meter" title=${tr}><small>${tr === "mic" ? "Mic" : "System"}</small>
+            <i style=${`width:${Math.min(100, Math.round(Math.sqrt(live.levels[tr] || 0) * 260))}%`}></i></span>`)}</div>`
+        : html`
+          <div class="timer muted">${SOURCES.find((x) => x.id === src).sub}</div>
+          <button class="roundbtn" disabled=${busy} onClick=${start} title="Start recording"><i></i></button>
+          <div class="meters hint">${busy ? "Starting…" : src !== "mic" ? "First time: macOS asks to allow system audio." : "Start recording"}</div>`}
+      </div>
     </div>
   </div>`;
 }
@@ -660,7 +824,7 @@ function Knowledge({ p, load }) {
 
 // ---------- meeting
 
-function Meeting({ pid, mid, at }) {
+function Meeting({ pid, mid, at, projects, reloadProjects }) {
   const [m, setM] = useState(null);
   const [menu, setMenu] = useState(null);     // {x, y, para}
   const [editing, setEditing] = useState(null); // paragraph index
@@ -760,10 +924,15 @@ function Meeting({ pid, mid, at }) {
     try { await api(base + "/summarize", { json: {} }); load(); } catch (e) { toast(e.message); }
   };
   const more = (v) => {
-    if (v.startsWith("spk:")) { setCount(v.slice(4)); reprocessWith("speakers", Number(v.slice(4))); }
-    else if (v === "summarize") { setView("summary"); summarizeNow(); }
+    if (v === "speakers") {
+      const n = prompt("How many people spoke? Leave empty to let Folio work it out.", "");
+      if (n === null) return;
+      reprocessWith("speakers", Number(n) > 0 ? Number(n) : -1);
+    } else if (v === "summarize") {
+      if (m.summary?.edited && !confirm("Summarize again? Your edits to the summary will be replaced.")) return;
+      setView("summary"); summarizeNow();
+    } else if (v === "srt") location.href = "/api" + base + "/export.srt";
     else if (v === "process") reprocess("process");
-    else if (v === "delete") remove();
   };
   const fix = async (mode) => {
     setView("transcript");
@@ -773,15 +942,31 @@ function Meeting({ pid, mid, at }) {
     try { setM(await api(base + "/corrections", { json: { ids, accept } })); } catch (e) { toast(e.message); }
   };
   const remove = async () => {
-    if (!confirm(`Move "${m.title}" to the Trash?`)) return;
+    if (!confirm(`Delete “${m.title}”? It moves to the macOS Trash, so you can still restore it from there.`)) return;
     await api(base, { method: "DELETE" });
     location.hash = `#/p/${encodeURIComponent(pid)}`;
   };
   const speakers = t ? Object.keys(t.speakers).map(Number) : [];
 
+  const moveTo = async (to) => {
+    if (!to || to === pid) return;
+    try {
+      const r = await api(base + "/move", { json: { to } });
+      reloadProjects && reloadProjects();
+      toast(to === "_unsorted" ? "Moved to Unsorted" : "Moved — summarizing it with that project's context");
+      location.hash = `#/p/${encodeURIComponent(r.project)}/m/${encodeURIComponent(r.meeting)}`;
+    } catch (e) { toast(e.message); }
+  };
   return html`<div class="page">
-    <div class="crumb"><a href=${"#/p/" + encodeURIComponent(pid)}>${m.projectName}</a></div>
-    <h1><input value=${m.title} onChange=${(e) => rename(e.target.value)} /></h1>
+    <div class="row meetinghead">
+      <label class="fld"><span>Project</span>
+        <select value=${pid} onChange=${(e) => moveTo(e.target.value)} disabled=${!!m.job} title="Move this recording to another project">
+          ${(projects || []).map((x) => html`<option value=${x.id}>${x.builtin ? "Unsorted" : x.name}</option>`)}
+        </select></label>
+      <span class="spacer"></span>
+      <button class="btn danger" onClick=${remove}>Delete recording</button>
+    </div>
+    <h1><input value=${m.title} onChange=${(e) => rename(e.target.value)} title="Click to rename" /></h1>
     <div class="sub">${when(m.date)}${m.duration ? " · " + clock(m.duration) : ""}${speakers.length ? ` · ${speakers.length} speaker${speakers.length === 1 ? "" : "s"}` : ""}</div>
 
     <div class="player">
@@ -791,24 +976,14 @@ function Meeting({ pid, mid, at }) {
           : m.status === "error" ? html`<span class="badge err">Failed: ${m.error}</span>`
           : m.jobError ? html`<span class="badge err" title=${m.jobError}>${m.jobError.length > 90 ? m.jobError.slice(0, 90) + "…" : m.jobError}</span>` : null}
         <span class="spacer"></span>
-        ${t ? html`<select disabled=${!!m.job} onChange=${(e) => { const v = e.target.value; e.target.value = ""; if (v) fix(v); }}>
-          <option value="">Fix transcript…</option>
-          <option value="text">Check text (AI, fast)</option>
-          <option value="audio">Listen again (audio)</option>
-          <option value="both">Both (best)</option>
-        </select>
-        <select onChange=${(e) => { if (e.target.value) location.href = "/api" + base + "/export." + e.target.value; e.target.value = ""; }}>
-          <option value="">Export…</option><option value="md">Markdown</option><option value="txt">Text</option><option value="srt">Subtitles (SRT)</option>
-        </select>` : null}
+        ${t ? html`<button class="btn" disabled=${!!m.job} onClick=${() => fix("both")} title="Listen again with a second model and check the text with the AI, then review each fix">Fix transcript</button>
+        <a class="btn" href=${"/api" + base + "/export.md"} title="Download the transcript as Markdown">Export</a>` : null}
         <select onChange=${(e) => { const v = e.target.value; e.target.value = ""; more(v); }}>
           <option value="">More…</option>
-          ${t ? html`<optgroup label="Find speakers again">
-            <option value="spk:-1" disabled=${!!m.job}>Detect how many</option>
-            ${[2, 3, 4, 5, 6, 8].map((n) => html`<option value=${"spk:" + n} disabled=${!!m.job}>${n} speakers</option>`)}
-          </optgroup>
-          <option value="summarize" disabled=${!!m.job}>Summarize again</option>` : null}
+          ${t ? html`<option value="speakers" disabled=${!!m.job}>Find speakers again…</option>
+          <option value="summarize" disabled=${!!m.job}>Summarize again</option>
+          <option value="srt">Export subtitles (SRT)</option>` : null}
           <option value="process" disabled=${!!m.job}>Transcribe again</option>
-          <option value="delete">Delete recording…</option>
         </select>
       </div>
     </div>
@@ -817,7 +992,8 @@ function Meeting({ pid, mid, at }) {
       <button class=${tab === "summary" ? "on" : ""} onClick=${() => setView("summary")}>Summary</button>
       <button class=${tab === "transcript" ? "on" : ""} onClick=${() => setView("transcript")}>Transcript${m.corrections?.length ? html` <span class="badge">${m.corrections.length}</span>` : null}</button>
     </div>` : null}
-    ${t && tab === "summary" ? html`<${Summary} m=${m} job=${m.job} summarize=${summarizeNow} jump=${(sec) => { setView("transcript"); setTimeout(() => {
+    ${t && tab === "summary" ? html`<${Summary} m=${m} job=${m.job} summarize=${summarizeNow} save=${async (body) => {
+        try { setM(await api(base + "/summary", { method: "PUT", json: body })); toast("Summary saved"); } catch (e) { toast(e.message); } }} jump=${(sec) => { setView("transcript"); setTimeout(() => {
         const i = starts.findIndex((x) => x >= sec - 0.01);
         textRef.current?.querySelector(`span[data-i="${Math.max(0, i)}"]`)?.scrollIntoView({ block: "center" });
         seek(sec); }, 30); }} />` : null}
@@ -925,26 +1101,67 @@ function md(text) {
 
 const secs = (mmss) => { const p = String(mmss || "").split(":").map(Number); return p.length === 2 && !p.some(isNaN) ? p[0] * 60 + p[1] : null; };
 
-function Summary({ m, job, summarize, jump }) {
+// Summary sections as editable text, one item per line.
+const toLines = {
+  topics: (xs) => xs.map((x) => `${x.start ? x.start + " " : ""}${x.title}${x.summary ? " — " + x.summary : ""}`).join("\n"),
+  action_items: (xs) => xs.map((x) => `${x.task}${x.owner ? " — " + x.owner : ""}${x.due ? ` (due ${x.due})` : ""}`).join("\n"),
+  progress: (xs) => xs.map((x) => `${x.area ? x.area + ": " : ""}${x.update}`).join("\n"),
+  plain: (xs) => xs.join("\n"),
+};
+const lines = (t) => t.split("\n").map((x) => x.trim()).filter(Boolean);
+const fromLines = {
+  topics: (t) => lines(t).map((l) => { const m = l.match(/^(\d+:\d\d)?\s*(.+?)(?:\s+—\s+(.*))?$/); return { start: m[1] || "", title: m[2], summary: m[3] || "" }; }),
+  action_items: (t) => lines(t).map((l) => { const due = l.match(/\s*\(due ([^)]*)\)\s*$/); if (due) l = l.slice(0, due.index); const [task, owner] = l.split(/\s+—\s+/); return { task, owner: owner || "", due: due ? due[1] : "" }; }),
+  progress: (t) => lines(t).map((l) => { const i = l.indexOf(": "); return i > 0 ? { area: l.slice(0, i), update: l.slice(i + 2) } : { area: "", update: l }; }),
+  plain: lines,
+};
+
+function SummaryEditor({ s, save, cancel }) {
+  const [f, setF] = useState({
+    overview: s.overview, topics: toLines.topics(s.topics), decisions: toLines.plain(s.decisions),
+    action_items: toLines.action_items(s.action_items), progress: toLines.progress(s.progress), open_questions: toLines.plain(s.open_questions),
+  });
+  const set = (k) => (e) => { const v = e.target.value; setF((cur) => ({ ...cur, [k]: v })); };
+  const field = (k, label, hint, rows = 4) => html`<label>${label}</label>${hint ? html`<p>${hint}</p>` : null}
+    <textarea rows=${rows} value=${f[k]} onInput=${set(k)}></textarea>`;
+  const submit = () => save({
+    overview: f.overview.trim(), topics: fromLines.topics(f.topics), decisions: fromLines.plain(f.decisions),
+    action_items: fromLines.action_items(f.action_items), progress: fromLines.progress(f.progress), open_questions: fromLines.plain(f.open_questions),
+  });
+  return html`<div class="knowledge summaryedit">
+    ${field("overview", "Overview", null, 4)}
+    ${field("topics", "Topics", "One per line: time, title — summary (e.g. 4:10 Budget — agreed to cap at 25 euros)")}
+    ${field("decisions", "Decisions", "One per line")}
+    ${field("action_items", "Action items", "One per line: task — owner (due date)")}
+    ${field("progress", "Progress", "One per line: area: what moved forward")}
+    ${field("open_questions", "Open questions", "One per line", 3)}
+    <div class="row" style="margin-top:10px"><button class="btn primary" onClick=${submit}>Save</button><button class="btn" onClick=${cancel}>Cancel</button>
+      <span class="hint" style="margin:0">Your edits stay until you summarize again.</span></div>
+  </div>`;
+}
+
+function Summary({ m, job, summarize, jump, save }) {
   const s = m.summary;
+  const [editing, setEditing] = useState(false);
   const running = job && job.kind === "summarize";
   if (!s) return html`<div class="empty">${running ? `Writing the summary… ${Math.round((job.progress || 0) * 100)}%`
     : html`No summary yet. <button class="btn primary" onClick=${summarize}>Summarize</button>`}</div>`;
+  if (editing) return html`<${SummaryEditor} s=${s} cancel=${() => setEditing(false)} save=${async (body) => { await save(body); setEditing(false); }} />`;
   const done = (m.todos || []).filter((x) => x.closedBy?.meeting === m.id);
   const list = (items, f) => items.length ? html`<ul>${items.map(f)}</ul>` : null;
   return html`<div class="summary">
+    <div class="row" style="justify-content:flex-end;margin-bottom:-6px"><button class="btn" disabled=${!!job} onClick=${() => setEditing(true)}>✎ Edit summary</button></div>
     <p class="overview">${s.overview}</p>
     ${s.topics.length ? html`<h4>Topics</h4>${list(s.topics, (x) => html`<li>
       ${secs(x.start) != null ? html`<span class="ts" style="display:inline" onClick=${() => jump(secs(x.start))}>${x.start}</span> ` : null}
-      <b>${x.title}</b> — ${x.summary}</li>`)}` : null}
+      <b>${x.title}</b>${x.summary ? html` — ${x.summary}` : null}</li>`)}` : null}
     ${s.decisions.length ? html`<h4>Decisions</h4>${list(s.decisions, (x) => html`<li>${x}</li>`)}` : null}
     ${s.action_items.length ? html`<h4>Action items</h4>${list(s.action_items, (x) => html`<li>${x.task}${x.owner ? html` <span class="owner">${x.owner}</span>` : null}${x.due ? html` <small>due ${x.due}</small>` : null}</li>`)}` : null}
     ${done.length ? html`<h4>Done since earlier meetings</h4>${list(done, (x) => html`<li><s>${x.text}</s>${x.closedBy.note ? html` <small>${x.closedBy.note}</small>` : null}</li>`)}` : null}
-    ${s.progress.length ? html`<h4>Progress</h4>${list(s.progress, (x) => html`<li><b>${x.area}</b>: ${x.update}</li>`)}` : null}
+    ${s.progress.length ? html`<h4>Progress</h4>${list(s.progress, (x) => html`<li>${x.area ? html`<b>${x.area}</b>: ` : null}${x.update}</li>`)}` : null}
     ${s.open_questions.length ? html`<h4>Open questions</h4>${list(s.open_questions, (x) => html`<li>${x}</li>`)}` : null}
-    ${s.updatedState === false ? html`<div class="hint">This is an older meeting, so re-summarizing it didn't change the project state. Use “Update…” on the project overview for that.</div>` : null}
-    <div class="row hint" style="margin-top:18px">Written by ${s.writer || "Qwen3 8B on this Mac"} using the project's knowledge, state, to-dos and earlier meetings.
-      <span class="spacer"></span><button class="btn" disabled=${!!job} onClick=${summarize}>${running ? "Summarizing…" : "Summarize again"}</button></div>
+    ${s.updatedState === false ? html`<div class="hint">This is an older recording, so it didn't change the project summary. Use “Tell the AI what changed” on the project overview for that.</div>` : null}
+    <div class="row hint" style="margin-top:18px">${s.edited ? "Edited by you. " : ""}Written by ${s.writer || "Qwen3 8B on this Mac"} using the project's knowledge, summary, to-dos and earlier recordings.</div>
   </div>`;
 }
 
@@ -1019,7 +1236,6 @@ function Person({ id, projects }) {
   useEffect(() => { load(); }, [id]);
   if (!p) return html`<div class="page"></div>`;
   const save = async (body) => { await api("/people/" + id, { method: "PUT", json: body }); load(); };
-  const toggleProject = (pid) => save({ projects: p.projects.includes(pid) ? p.projects.filter((x) => x !== pid) : [...p.projects, pid] });
   const remove = async () => {
     if (!confirm(`Remove ${p.name}? Recordings keep their text; the speaker just becomes unnamed.`)) return;
     await api("/people/" + id, { method: "DELETE" }); location.hash = "#/people";
@@ -1031,8 +1247,9 @@ function Person({ id, projects }) {
     <div class="sub">${p.voiceCount ? `${p.voiceCount} voice sample${p.voiceCount > 1 ? "s" : ""}` : "No voice sample yet: name them in a recording"}
       · <label style="cursor:pointer"><input type="checkbox" checked=${!!p.me} onChange=${(e) => save({ me: e.target.checked })} /> This is me</label></div>
     <div class="knowledge">
-      <label>Projects</label>
-      <div class="row">${(projects || []).map((pr) => html`<button class=${"pill" + (p.projects.includes(pr.id) ? " on" : "")} onClick=${() => toggleProject(pr.id)}>${pr.name}</button>`)}</div>
+      <label>In projects</label>
+      <p>${(projects || []).filter((pr) => p.projects.includes(pr.id) && !pr.builtin).map((pr, i) => html`${i ? ", " : ""}<a class="src-link" href=${"#/p/" + encodeURIComponent(pr.id)}>${pr.name}</a>`)}
+        ${!p.projects.filter((x) => x !== "_unsorted").length ? "None yet." : null} Add or remove people from a project in its People panel.</p>
       <label>Also known as</label>
       <input type="text" style="width:100%" placeholder="Nicknames, how others call them (comma separated)" value=${aliases} onInput=${(e) => setAliases(e.target.value)} />
       <label>Notes</label>

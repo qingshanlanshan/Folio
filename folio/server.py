@@ -34,6 +34,7 @@ def _claude_error(request: Request, exc: claude.ClaudeError):
 
 @app.on_event("startup")
 def _start():
+    store.ensure_unsorted()
     jobs.start()
     runtime.start()
 
@@ -61,8 +62,36 @@ def new_project(body: ProjectIn):
 
 @app.get("/api/projects/{pid}")
 def project(pid: str):
+    members = [{"id": p["id"], "name": p["name"], "notes": p.get("notes", ""), "voiceCount": len(p["voices"]), "me": p.get("me", False)}
+               for p in people.all_people() if pid in p["projects"]]
     return {**store.get_project(pid), "meetings": store.list_meetings(pid), "jobs": _jobs_for(pid),
-            "state": summarize.state(pid), "todos": summarize.todos(pid)}
+            "state": summarize.state(pid), "todos": summarize.todos(pid), "people": members}
+
+
+class MemberIn(BaseModel):
+    person: str | None = None      # an existing person
+    name: str | None = None        # or a new one
+
+
+@app.post("/api/projects/{pid}/people")
+def add_member(pid: str, body: MemberIn):
+    store.project_dir(pid)
+    if body.person:
+        p = people.get(body.person)
+    elif (body.name or "").strip():
+        p = people.create(body.name, pid)
+    else:
+        raise HTTPException(400, "person or name")
+    if pid not in p["projects"]:
+        people.update(p["id"], projects=p["projects"] + [pid])
+    return project(pid)
+
+
+@app.delete("/api/projects/{pid}/people/{person}")
+def remove_member(pid: str, person: str):
+    p = people.get(person)
+    people.update(person, projects=[x for x in p["projects"] if x != pid])
+    return project(pid)
 
 
 class StateIn(BaseModel):
@@ -166,6 +195,8 @@ def edit_project(pid: str, body: ProjectIn):
 
 @app.delete("/api/projects/{pid}")
 def delete_project(pid: str):
+    if pid == store.UNSORTED:
+        raise HTTPException(400, "Unsorted can't be deleted.")
     store.trash(store.project_dir(pid))
     return {"ok": True}
 
@@ -216,7 +247,49 @@ class MeetingIn(BaseModel):
 
 @app.patch("/api/projects/{pid}/meetings/{mid}")
 def edit_meeting(pid: str, mid: str, body: MeetingIn):
-    store.update_meeting(pid, mid, title=body.title, date=body.date)
+    store.update_meeting(pid, mid, title=body.title, date=body.date,
+                         titleSource="user" if body.title else None)
+    return meeting(pid, mid)
+
+
+def move(pid: str, mid: str, to: str, summarize_after: bool = True) -> str:
+    """Files a recording in another project, with its voice prints and to-dos."""
+    if pid == to:
+        return mid
+    store.project_dir(to)
+    if f"{pid}/{mid}" in jobs.status():
+        raise HTTPException(409, "This recording is being processed; move it when that finishes.")
+    new_mid = store.move_meeting(pid, mid, to)
+    people.retarget(pid, mid, to, new_mid)
+    summarize.move_todos(pid, mid, to, new_mid)
+    d = store.meeting_dir(to, new_mid)
+    # Summarize again with the new project's context (its state and to-dos update too).
+    if summarize_after and to != store.UNSORTED and (d / "transcript.json").exists():
+        jobs.submit(to, new_mid, "summarize")
+    return new_mid
+
+
+class MoveIn(BaseModel):
+    to: str
+
+
+@app.post("/api/projects/{pid}/meetings/{mid}/move")
+def move_meeting(pid: str, mid: str, body: MoveIn):
+    return {"project": body.to, "meeting": move(pid, mid, body.to)}
+
+
+class SummaryIn(BaseModel):
+    overview: str = ""
+    topics: list[dict] = []
+    decisions: list[str] = []
+    action_items: list[dict] = []
+    progress: list[dict] = []
+    open_questions: list[str] = []
+
+
+@app.put("/api/projects/{pid}/meetings/{mid}/summary")
+def edit_summary(pid: str, mid: str, body: SummaryIn):
+    summarize.save_edited(pid, mid, body.model_dump())
     return meeting(pid, mid)
 
 
@@ -403,7 +476,7 @@ def do_search(q: str = "", person: str | None = None):
 # --- live recording
 
 class LiveIn(BaseModel):
-    project: str
+    project: str = store.UNSORTED
     title: str = ""
     mic: bool = True
     system: bool = False
@@ -427,6 +500,20 @@ def live_start(body: LiveIn):
 def live_state(since: int = 0):
     s = live._session
     return s.state(since) if s else None
+
+
+class LiveTargetIn(BaseModel):
+    project: str
+
+
+@app.patch("/api/live")
+def live_target(body: LiveTargetIn):
+    s = live.active()
+    if not s:
+        raise HTTPException(404, "Not recording")
+    store.project_dir(body.project)
+    s.target = body.project
+    return s.state(len(s.events))
 
 
 @app.post("/api/live/stop")

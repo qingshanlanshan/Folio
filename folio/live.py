@@ -75,6 +75,7 @@ class Track:
 class Session:
     def __init__(self, pid: str, title: str, mic: bool, system: bool, simulate: str | None = None):
         self.pid, self.title = pid, title
+        self.target = pid               # where to file it; can change while recording
         self.mic, self.system = mic, system
         self.started = time.time()
         self.mid, self.dir = store.create_meeting(pid, title, self.started, "recording", None)
@@ -234,13 +235,18 @@ class Session:
                     save_flac(load(w), self.dir / f"{name}.flac")
                 w.unlink()
         dur = max([t.samples for t in self.tracks.values()] + [0]) / SR
-        self.done = True
         if dur < 1:
             store.update_meeting(self.pid, self.mid, status="error", duration=dur,
                                  error=self.error or "Nothing was recorded.")
+            self.done = True
             return
         store.update_meeting(self.pid, self.mid, duration=round(dur, 2), status="queued")
+        if self.target != self.pid:
+            from .server import move
+            self.mid = move(self.pid, self.mid, self.target, summarize_after=False)
+            self.pid = self.target
         jobs.submit(self.pid, self.mid)
+        self.done = True        # last: the page reads pid/mid once this is set
 
     # --- control
 
@@ -253,7 +259,7 @@ class Session:
 
     def state(self, since: int = 0) -> dict:
         return {
-            "pid": self.pid, "mid": self.mid, "title": self.title, "started": self.started,
+            "pid": self.pid, "mid": self.mid, "title": self.title, "started": self.started, "target": self.target,
             "elapsed": round(max([t.samples for t in self.tracks.values()] + [0]) / SR, 1),
             "levels": {TRACKS[i]: round(t.level, 4) for i, t in self.tracks.items()},
             "tracks": [n for n, on in (("mic", self.mic), ("system", self.system)) if on],

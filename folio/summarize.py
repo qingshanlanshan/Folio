@@ -194,12 +194,46 @@ def summarize(pid: str, mid: str, progress=lambda f: None) -> dict:
     s["updatedState"] = latest
     store.write_json(d / "summary.json", s)
     m = store.read_json(d / "meeting.json")
+    if s.get("title") and auto_title(m):
+        # Name the recording after its topic, unless you named it yourself.
+        store.update_meeting(pid, mid, title=s["title"], titleSource="auto")
+        m["title"] = s["title"]
     (d / "summary.md").write_text(render(s, m["title"]), "utf-8")
     _apply_todos(pid, mid, s, t)
-    if latest:
+    if latest and pid != store.UNSORTED:
         _update_state(pid, m["title"], s)
     progress(1.0)
     return s
+
+
+def auto_title(m: dict) -> bool:
+    """Was this title given by Folio (default or from a summary), not typed by you?"""
+    if "titleSource" in m:
+        return m["titleSource"] != "user"
+    stem = (m.get("original") or "").rsplit(".", 1)[0]
+    return m["title"].startswith("Recording ") or (stem and m["title"] == stem)
+
+
+def save_edited(pid: str, mid: str, s: dict) -> dict:
+    """Your edits to a meeting's summary (kept until you summarize again)."""
+    d = store.meeting_dir(pid, mid)
+    old = store.read_json(d / "summary.json", default={})
+    s = _clean({**old, **s})
+    s.update(at=old.get("at", time.time()), writer=old.get("writer", ""), updatedState=old.get("updatedState", True), edited=True)
+    store.write_json(d / "summary.json", s)
+    (d / "summary.md").write_text(render(s, store.read_json(d / "meeting.json")["title"]), "utf-8")
+    return s
+
+
+def move_todos(pid: str, mid: str, to: str, new_mid: str) -> None:
+    """A recording moved to another project takes the to-dos it created along."""
+    mine = [x for x in todos(pid) if (x.get("from") or {}).get("meeting") == mid]
+    if not mine:
+        return
+    save_todos(pid, [x for x in todos(pid) if x not in mine])
+    for x in mine:
+        x["from"] = {"meeting": new_mid}
+    save_todos(to, todos(to) + mine)
 
 
 def _clean(s: dict) -> dict:

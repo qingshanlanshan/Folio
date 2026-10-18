@@ -58,6 +58,19 @@ def trash(path: Path) -> None:
 
 # --- projects
 
+UNSORTED = "_unsorted"
+
+
+def ensure_unsorted() -> None:
+    """Recordings not (yet) filed in a project live in a built-in "Unsorted" project."""
+    d = PROJECTS / UNSORTED
+    if not (d / "project.json").exists():
+        (d / "meetings").mkdir(parents=True, exist_ok=True)
+        write_json(d / "project.json", {"name": "Unsorted", "created": time.time(), "builtin": True})
+        (d / "project.md").write_text("", "utf-8")
+        (d / "glossary.tsv").write_text("# term\talso heard as (comma separated)\tnote\n", "utf-8")
+
+
 def project_dir(pid: str) -> Path:
     d = PROJECTS / pid
     if not (d / "project.json").exists() or ".." in pid or "/" in pid:
@@ -126,11 +139,20 @@ def list_meetings(pid: str) -> list[dict]:
     return sorted(out, key=lambda m: m.get("date", 0), reverse=True)
 
 
+def move_meeting(pid: str, mid: str, to: str) -> str:
+    """Moves a recording to another project (folder and all). Returns its id there."""
+    src = meeting_dir(pid, mid)
+    dest_parent = project_dir(to) / "meetings"
+    dest = _unique(dest_parent, mid)
+    shutil.move(str(src), dest)
+    return dest.name
+
+
 def create_meeting(pid: str, title: str, date: float, source: str, original_name: str | None) -> tuple[str, Path]:
     base = datetime.fromtimestamp(date).strftime("%Y-%m-%d-%H%M") + "-" + _slug(title)
     d = _unique(project_dir(pid) / "meetings", base)
     d.mkdir()
-    write_json(d / "meeting.json", {"title": title, "date": date, "source": source,
+    write_json(d / "meeting.json", {"title": title, "date": date, "source": source, "titleSource": "auto",
                                     "original": original_name, "status": "queued", "created": time.time()})
     return d.name, d
 

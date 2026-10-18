@@ -212,6 +212,24 @@ def match(project: str, meeting: str) -> None:
     store.write_json(d / "transcript.json", t)
 
 
+def retarget(project: str, meeting: str, to: str, new_meeting: str) -> None:
+    """After a recording moves: its voice prints point to the new place, and its people join the project."""
+    d = store.meeting_dir(to, new_meeting)
+    t = store.read_json(d / "transcript.json", default={})
+    linked = {s.get("person") for s in t.get("speakers", {}).values() if s.get("person")}
+    for p in all_people():
+        changed = False
+        for v in p["voices"]:
+            if v.get("project") == project and v.get("meeting") == meeting:
+                v["project"], v["meeting"] = to, new_meeting
+                changed = True
+        if p["id"] in linked and to not in p["projects"] and to != store.UNSORTED:
+            p["projects"].append(to)
+            changed = True
+        if changed:
+            store.write_json(PEOPLE / f"{p['id']}.json", {k: v for k, v in p.items() if k != "id"})
+
+
 def appearances(pid: str) -> list[dict]:
     out = []
     for proj in store.list_projects():
