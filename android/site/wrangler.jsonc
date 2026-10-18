@@ -1,0 +1,10 @@
+// Cloudflare Workers config: static files only (download page, version.json, the APK).
+// Published from this Mac with ./deploy.sh (the APK is not kept in git).
+{
+  "name": "folio-android",
+  "compatibility_date": "2026-10-18",
+  "assets": { "directory": "./public" },
+  // Cloudflare creates the DNS record and certificate for the custom domain.
+  "routes": [{ "pattern": "folio.qshlab.com", "custom_domain": true }],
+  "workers_dev": false,
+}

@@ -1,0 +1,8 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- A page with a sound wave: the Folio icon. -->
+    <path android:fillColor="#F4EFE4" android:pathData="M38,30h22l10,10v38H38z" />
+    <path android:fillColor="#D8CFBD" android:pathData="M60,30v10h10z" />
+    <path android:strokeColor="#2F5D50" android:strokeWidth="3.5" android:strokeLineCap="round"
+        android:pathData="M46,55v8M52,50v18M58,46v26M64,52v14" />
+</vector>
