@@ -40,25 +40,75 @@ def state(pid: str) -> str:
 
 
 def save_state(pid: str, text: str, reason: str) -> None:
+    """Replaces state.md; the previous version goes to state-history/ (listed in index.json)."""
     d = store.project_dir(pid)
     old = state(pid)
+    meta = store.read_json(d / "project.json")
     if old.strip():
         h = d / "state-history"
         h.mkdir(exist_ok=True)
-        (h / time.strftime("%Y-%m-%d-%H%M%S.md")).write_text(old, "utf-8")
+        name = time.strftime("%Y-%m-%d-%H%M%S.md")
+        (h / name).write_text(old, "utf-8")
+        idx = store.read_json(h / "index.json", default={"versions": []})
+        prev = meta.get("stateUpdated") or {}
+        idx["versions"].append({"file": name, "at": prev.get("at", time.time()), "reason": prev.get("reason", "")})
+        store.write_json(h / "index.json", idx)
     (d / "state.md").write_text(text.strip() + "\n", "utf-8")
-    meta = store.read_json(d / "project.json")
     meta["stateUpdated"] = {"at": time.time(), "reason": reason}
+    meta.pop("stateError", None)
     store.write_json(d / "project.json", meta)
 
 
-def _context(pid: str, mid: str, t: dict) -> str:
+def state_history(pid: str) -> list[dict]:
+    h = store.project_dir(pid) / "state-history"
+    idx = store.read_json(h / "index.json", default={"versions": []})["versions"]
+    known = {v["file"] for v in idx}
+    # Versions saved before the index existed.
+    for f in sorted(h.glob("*.md")) if h.exists() else []:
+        if f.name not in known:
+            idx.append({"file": f.name, "at": f.stat().st_mtime, "reason": ""})
+    out = []
+    for v in sorted(idx, key=lambda v: -v["at"]):
+        f = h / v["file"]
+        if f.exists():
+            out.append({**v, "text": f.read_text("utf-8")})
+    return out
+
+
+def restore_state(pid: str, file: str) -> None:
+    for v in state_history(pid):
+        if v["file"] == file:
+            when = time.strftime("%d %b %Y %H:%M", time.localtime(v["at"]))
+            save_state(pid, v["text"], f"restored the version from {when}")
+            return
+    raise store.NotFound(file)
+
+
+def is_latest(pid: str, mid: str) -> bool:
+    """Is this the most recent meeting with a transcript? Only that one moves the project state forward."""
+    date = store.read_json(store.meeting_dir(pid, mid) / "meeting.json")["date"]
+    for m in store.list_meetings(pid):
+        if m["id"] != mid and m["date"] > date and (store.meeting_dir(pid, m["id"]) / "transcript.json").exists():
+            return False
+    return True
+
+
+def _todo_date(x: dict, dates: dict) -> float:
+    return dates.get((x.get("from") or {}).get("meeting"), x.get("created", 0))
+
+
+def _context(pid: str, mid: str, t: dict, latest: bool = True) -> str:
     proj = store.get_project(pid)
     present = [s.get("person") for s in t["speakers"].values() if s.get("person")]
     ppl = [people.get(p) for p in present]
     gl = glossary.parse(proj["glossary"])
-    open_todos = [x for x in todos(pid) if x["status"] == "open"][:40]
     date = store.read_json(store.meeting_dir(pid, mid) / "meeting.json")["date"]
+    dates = {m["id"]: m["date"] for m in store.list_meetings(pid)}
+    open_todos = [x for x in todos(pid) if x["status"] == "open"]
+    if not latest:
+        # An older meeting can only close to-dos that existed before it.
+        open_todos = [x for x in open_todos if _todo_date(x, dates) < date]
+    open_todos = open_todos[:40]
     earlier = [m for m in store.list_meetings(pid) if m["date"] < date and m.get("status") == "ready"][:3]
     prev = []
     for m in reversed(earlier):
@@ -71,7 +121,9 @@ def _context(pid: str, mid: str, t: dict) -> str:
     if proj["knowledge"].strip():
         parts.append("About the project (from the user):\n" + proj["knowledge"][:4000])
     if state(pid).strip():
-        parts.append("Project state before this meeting:\n" + state(pid)[:4000])
+        label = ("Project state before this meeting" if latest else
+                 "Current project state (written after LATER meetings: background only, report only what this meeting says)")
+        parts.append(f"{label}:\n" + state(pid)[:4000])
     if prev:
         parts.append("Earlier meetings:\n" + "\n".join(prev))
     if open_todos:
@@ -113,7 +165,8 @@ def _notes_for_chunk(ctx: str, text: str) -> str:
 def summarize(pid: str, mid: str, progress=lambda f: None) -> dict:
     d = store.meeting_dir(pid, mid)
     t = people.resolve(store.read_json(d / "transcript.json"))
-    ctx = _context(pid, mid, t)
+    latest = is_latest(pid, mid)
+    ctx = _context(pid, mid, t, latest)
     text = transcript_text(t)
     progress(0.05)
     if count_tokens(text) > llm.context_tokens():
@@ -138,11 +191,13 @@ def summarize(pid: str, mid: str, progress=lambda f: None) -> dict:
     s = _clean(s)
     s["at"] = time.time()
     s["writer"] = llm.describe()
+    s["updatedState"] = latest
     store.write_json(d / "summary.json", s)
     m = store.read_json(d / "meeting.json")
     (d / "summary.md").write_text(render(s, m["title"]), "utf-8")
     _apply_todos(pid, mid, s, t)
-    _update_state(pid, m["title"], s)
+    if latest:
+        _update_state(pid, m["title"], s)
     progress(1.0)
     return s
 
@@ -211,6 +266,110 @@ def _update_state(pid: str, title: str, s: dict) -> None:
     out = re.sub(r"^```(?:markdown)?\s*|\s*```$", "", out)
     if out:
         save_state(pid, out, f"after “{title}”")
+
+
+# --- revising the state by hand: a note about what changed, or a rebuild from every meeting
+
+REVISE_SYSTEM = STATE_SYSTEM + """
+The user has told you something important changed. Their note takes priority over everything else: rewrite
+whatever it contradicts, and say what it changes."""
+
+REBUILD_SYSTEM = """You write a short document describing where a project stands now, from scratch, using the
+project notes and its meeting record (oldest first). Later meetings override earlier ones; the user's note, if
+any, overrides everything. Markdown, at most 350 words, with these sections: ## Goal, ## Current status,
+## Recent decisions, ## Open issues, ## Next steps. Only state facts found in the inputs."""
+
+
+def _meeting_digest(pid: str, m: dict) -> str:
+    s = store.read_json(store.meeting_dir(pid, m["id"]) / "summary.json", default={})
+    if not s:
+        return ""
+    when = time.strftime("%d %b %Y", time.localtime(m["date"]))
+    out = [f"### {m['title']} ({when})", s.get("overview", "")]
+    if s.get("decisions"):
+        out.append("Decisions: " + "; ".join(s["decisions"]))
+    if s.get("action_items"):
+        out.append("Action items: " + "; ".join(x["task"] + (f" ({x['owner']})" if x.get("owner") else "")
+                                                for x in s["action_items"]))
+    if s.get("progress"):
+        out.append("Progress: " + "; ".join(f"{x.get('area', '')}: {x['update']}" for x in s["progress"]))
+    if s.get("open_questions"):
+        out.append("Open questions: " + "; ".join(s["open_questions"]))
+    return "\n".join(out)
+
+
+def _clean_md(out: str) -> str:
+    return re.sub(r"^```(?:markdown)?\s*|\s*```$", "", out.strip())
+
+
+def _note_to_knowledge(pid: str, note: str) -> None:
+    proj = store.get_project(pid)
+    add = f"## Update {time.strftime('%d %b %Y')}\n{note.strip()}\n"
+    store.update_project(pid, knowledge=(proj["knowledge"].rstrip() + "\n\n" + add).lstrip())
+
+
+def revise_state(pid: str, note: str, progress=lambda f: None) -> None:
+    proj = store.get_project(pid)
+    open_todos = [x for x in todos(pid) if x["status"] == "open"][:30]
+    user = (f"Project: {proj['name']}\n\nAbout the project:\n{proj['knowledge'][:4000] or '(nothing yet)'}\n\n"
+            f"Current state document:\n{state(pid) or '(empty)'}\n\n"
+            "Open to-dos:\n" + "\n".join(f"- {x['text']}" for x in open_todos)
+            + f"\n\nThe user's note on what changed:\n{note.strip()}\n\nWrite the updated state document.")
+    progress(0.2)
+    out = _clean_md(chat(REVISE_SYSTEM, user, max_tokens=900, temp=0.2))
+    if out:
+        save_state(pid, out, "updated with your note")
+
+
+def rebuild_state(pid: str, note: str = "", progress=lambda f: None) -> None:
+    """Rewrites the state from all meeting summaries (oldest first) and the project notes. If they don't
+    fit in one request (the local model), they are folded in a few meetings at a time."""
+    proj = store.get_project(pid)
+    meetings = sorted(store.list_meetings(pid), key=lambda m: m["date"])
+    digests = [d for d in (_meeting_digest(pid, m) for m in meetings) if d]
+    head = f"Project: {proj['name']}\n\nAbout the project:\n{proj['knowledge'][:4000] or '(nothing yet)'}\n\n"
+    tail = f"\n\nThe user's note (takes priority):\n{note.strip()}" if note.strip() else ""
+    budget = max(2000, llm.context_tokens() - 3500) * 4        # in characters
+    batches, cur = [], ""
+    for dg in digests:
+        if cur and len(cur) + len(dg) > budget:
+            batches.append(cur); cur = ""
+        cur += dg + "\n\n"
+    if cur or not batches:
+        batches.append(cur or "(no summarized meetings yet)")
+    draft = ""
+    for i, b in enumerate(batches):
+        last = i == len(batches) - 1
+        user = head + (f"Draft state from the earlier meetings:\n{draft}\n\n" if draft else "") + \
+            f"Meetings{' (continued)' if draft else ''}:\n{b}" + (tail if last else "") + \
+            "\n\nWrite the state document" + (" as of the last meeting above." if not last else ".")
+        draft = _clean_md(chat(REBUILD_SYSTEM, user, max_tokens=900, temp=0.2)) or draft
+        progress((i + 1) / len(batches))
+    if draft:
+        save_state(pid, draft, "rebuilt from all meetings" + (" and your note" if note.strip() else ""))
+
+
+def run_state(job: dict, key: str) -> None:
+    """Job: revise or rebuild the project state (key "project/_state")."""
+    from .jobs import set_step
+    pid = job["pid"]
+    note = job.get("note", "")
+    try:
+        if note.strip() and job.get("addToKnowledge"):
+            _note_to_knowledge(pid, note)
+        set_step(key, "updating state")
+        with llm.for_project(pid):
+            if job.get("mode") == "rebuild":
+                rebuild_state(pid, note, lambda f: set_step(key, "updating state", f))
+            else:
+                revise_state(pid, note, lambda f: set_step(key, "updating state", f))
+    except Exception as e:
+        from .runtime import Cancelled
+        if not isinstance(e, Cancelled):
+            meta = store.read_json(store.project_dir(pid) / "project.json")
+            meta["stateError"] = str(e)[:300]
+            store.write_json(store.project_dir(pid) / "project.json", meta)
+        raise
 
 
 # --- ask the project

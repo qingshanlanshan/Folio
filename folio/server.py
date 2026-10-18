@@ -13,6 +13,7 @@ from . import claude, correct, jobs, live, people, runtime, search, store, summa
 jobs.AFTER.append(people.match)
 jobs.HANDLERS["correct"] = correct.run
 jobs.HANDLERS["summarize"] = summarize.run
+jobs.HANDLERS["state"] = summarize.run_state
 jobs.FOLLOW_UP["process"] = "summarize"
 from .paths import ROOT
 
@@ -71,6 +72,39 @@ class StateIn(BaseModel):
 @app.put("/api/projects/{pid}/state")
 def edit_state(pid: str, body: StateIn):
     summarize.save_state(pid, body.text, "edited by you")
+    return project(pid)
+
+
+class StateUpdateIn(BaseModel):
+    mode: str = "note"              # "note": revise with what changed; "rebuild": from all meetings
+    note: str = ""
+    addToKnowledge: bool = True
+
+
+@app.post("/api/projects/{pid}/state/update")
+def update_state(pid: str, body: StateUpdateIn):
+    store.project_dir(pid)
+    if body.mode not in ("note", "rebuild") or (body.mode == "note" and not body.note.strip()):
+        raise HTTPException(400, "Describe what changed.")
+    meta = store.read_json(store.project_dir(pid) / "project.json")
+    if meta.pop("stateError", None):
+        store.write_json(store.project_dir(pid) / "project.json", meta)
+    jobs.submit(pid, "_state", "state", mode=body.mode, note=body.note, addToKnowledge=body.addToKnowledge)
+    return project(pid)
+
+
+@app.get("/api/projects/{pid}/state/history")
+def state_history(pid: str):
+    return summarize.state_history(pid)
+
+
+class RestoreIn(BaseModel):
+    file: str
+
+
+@app.post("/api/projects/{pid}/state/restore")
+def restore_state(pid: str, body: RestoreIn):
+    summarize.restore_state(pid, body.file)
     return project(pid)
 
 
@@ -412,7 +446,7 @@ def all_jobs():
 # --- app: activity, models, windows, quit
 
 KIND = {"process": "Transcribing", "speakers": "Finding speakers", "correct": "Fixing transcript",
-        "summarize": "Summarizing"}
+        "summarize": "Summarizing", "state": "Updating project state"}
 
 
 @app.get("/api/status")
@@ -422,8 +456,9 @@ def app_status(window: str = ""):
     for key, st in jobs.status().items():
         pid, mid = key.split("/", 1)
         try:
-            title = store.read_json(store.meeting_dir(pid, mid) / "meeting.json")["title"]
             pname = store.get_project(pid)["name"]
+            title = "Where things stand" if mid == "_state" else \
+                store.read_json(store.meeting_dir(pid, mid) / "meeting.json")["title"]
         except store.NotFound:
             title, pname = mid, pid
         tasks.append({"key": key, "project": pid, "meeting": mid, "title": title, "projectName": pname,

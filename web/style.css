@@ -242,6 +242,13 @@ h3 { font: 600 17px var(--serif); }
 .card.dim { opacity: .55; }
 .errtext { color: var(--warn); }
 
+.histrow { border-top: 1px solid var(--line); padding: 8px 0; }
+.histrow .link { cursor: pointer; color: var(--accent); }
+.state.small { font-size: 14px; margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--line); }
+
+.checkline { display: flex; gap: 8px; align-items: flex-start; margin-top: 6px; font-size: 13px; cursor: pointer; }
+.checkline input { margin-top: 3px; flex: none; }
+
 @media (max-width: 720px) {
   .capture { grid-template-columns: 1fr; }
   .cols { grid-template-columns: 1fr; }

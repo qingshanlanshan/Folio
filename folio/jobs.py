@@ -244,7 +244,7 @@ def _worker() -> None:
                 store.update_meeting(job["pid"], job["mid"], status="processing")
             HANDLERS[job["kind"]](job, key)
             ok = True
-            if not main:
+            if not main and job["mid"] != "_state":
                 store.update_meeting(job["pid"], job["mid"], jobError="")
             if main:
                 store.update_meeting(job["pid"], job["mid"], status="ready", error="",
@@ -282,7 +282,7 @@ def _worker() -> None:
             _tell_done(job)
 
 
-DONE = {"process": "is transcribed", "speakers": "has new speaker labels", "summarize": "is transcribed and summarized",
+DONE = {"state": "has an updated project state", "process": "is transcribed", "speakers": "has new speaker labels", "summarize": "is transcribed and summarized",
         "correct": "has been checked for fixes"}
 
 

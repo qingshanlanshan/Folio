@@ -30,7 +30,7 @@ const spkName = (t, spk) => {
   if (spk == null) return "Unknown";
   return t.speakers?.[spk]?.name || `Speaker ${spk < 26 ? String.fromCharCode(65 + spk) : spk}`;
 };
-const STEPS = { stopped: "Stopped", "listening again": "Listening again", "checking text": "Checking text", summarizing: "Summarizing", recording: "Recording", queued: "Queued", decoding: "Reading audio", transcribing: "Transcribing", speakers: "Finding speakers" };
+const STEPS = { "updating state": "Updating", stopped: "Stopped", "listening again": "Listening again", "checking text": "Checking text", summarizing: "Summarizing", recording: "Recording", queued: "Queued", decoding: "Reading audio", transcribing: "Transcribing", speakers: "Finding speakers" };
 
 let toastTimer;
 function toast(msg) {
@@ -371,7 +371,6 @@ function Overview({ p, setP, goRecordings }) {
   const [q, setQ] = useState("");
   const [ans, setAns] = useState(null);
   const [asking, setAsking] = useState(false);
-  const [editState, setEditState] = useState(null);
   const [newTodo, setNewTodo] = useState("");
   const [showDone, setShowDone] = useState(false);
   const titles = Object.fromEntries(p.meetings.map((m) => [m.id, m.title]));
@@ -411,14 +410,7 @@ function Overview({ p, setP, goRecordings }) {
 
     <div class="cols">
       <section>
-        <div class="row"><h3>Where things stand</h3><span class="spacer"></span>
-          ${editState == null ? html`<button class="btn" onClick=${() => setEditState(p.state)}>Edit</button>` : null}</div>
-        ${editState != null ? html`<textarea rows="16" value=${editState} onInput=${(e) => setEditState(e.target.value)}></textarea>
-          <div class="row" style="margin-top:8px"><button class="btn primary" onClick=${async () => { setP({ ...(await api(base + "/state", { method: "PUT", json: { text: editState } })), jobs: p.jobs }); setEditState(null); }}>Save</button>
-          <button class="btn" onClick=${() => setEditState(null)}>Cancel</button></div>`
-          : p.state ? html`<div class="state" dangerouslySetInnerHTML=${{ __html: md(p.state) }}></div>
-            ${p.stateUpdated ? html`<div class="hint">Updated ${when(p.stateUpdated.at)} ${p.stateUpdated.reason}</div>` : null}`
-          : html`<div class="hint">Written by the AI after each meeting is summarized, and kept up to date. You can edit it.</div>`}
+        <${StateSection} p=${p} setP=${setP} base=${base} />
       </section>
       <section>
         <h3>To-dos <small style="font-weight:400;color:var(--muted)">${open.length} open</small></h3>
@@ -437,6 +429,73 @@ function Overview({ p, setP, goRecordings }) {
 
     <h3>Recent meetings</h3>
     <div class="mlist">${p.meetings.slice(0, 5).map((m) => html`<${MeetingRow} p=${p} m=${m} job=${p.jobs[m.id]} />`)}</div>`;
+}
+
+// "Where things stand": AI-maintained after each meeting; you can edit it, tell it what changed,
+// rebuild it from all meetings, or go back to an earlier version.
+function StateSection({ p, setP, base }) {
+  const [mode, setMode] = useState(null);      // null | "edit" | "update" | "history"
+  const [text, setText] = useState("");
+  const [note, setNote] = useState("");
+  const [toKnowledge, setToKnowledge] = useState(true);
+  const [history, setHistory] = useState(null);
+  const [open, setOpen] = useState(null);       // history file shown
+  const job = p.jobs["_state"];
+  const keepJobs = (x) => setP({ ...x, jobs: { ...x.jobs } });
+  const save = async () => { keepJobs(await api(base + "/state", { method: "PUT", json: { text } })); setMode(null); };
+  const update = async (m) => {
+    try {
+      keepJobs(await api(base + "/state/update", { json: { mode: m, note, addToKnowledge: toKnowledge } }));
+      setMode(null); setNote("");
+    } catch (e) { toast(e.message); }
+  };
+  const showHistory = async () => { setMode("history"); setHistory(null); setHistory(await api(base + "/state/history")); };
+  const restore = async (file) => {
+    if (!confirm("Go back to this version? The current one is kept in the history too.")) return;
+    keepJobs(await api(base + "/state/restore", { json: { file } })); setMode(null);
+  };
+  return html`
+    <div class="row"><h3>Where things stand</h3><span class="spacer"></span>
+      ${!mode && !job ? html`
+        <button class="btn" onClick=${() => { setText(p.state); setMode("edit"); }}>Edit</button>
+        <button class="btn" onClick=${() => setMode("update")}>Update…</button>
+        <button class="btn" onClick=${showHistory}>History</button>` : null}</div>
+
+    ${job ? html`<div class="card"><span class="badge">${job.step === "queued" ? "Waiting" : "Updating"}${job.progress ? " " + Math.round(job.progress * 100) + "%" : ""}</span>
+      <span class="hint"> Rewriting the project state…</span></div>` : null}
+    ${p.stateError && !job ? html`<div class="hint errtext">Last update failed: ${p.stateError}</div>` : null}
+
+    ${mode === "edit" ? html`<textarea rows="16" value=${text} onInput=${(e) => setText(e.target.value)}></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn primary" onClick=${save}>Save</button>
+      <button class="btn" onClick=${() => setMode(null)}>Cancel</button></div>`
+
+    : mode === "update" ? html`<div class="card">
+      <label style="font-weight:600">What changed?</label>
+      <textarea rows="4" placeholder="e.g. We dropped the hardware prototype and now focus on the app; the deadline moved to March."
+        value=${note} onInput=${(e) => setNote(e.target.value)}></textarea>
+      <label class="checkline"><input type="checkbox" checked=${toKnowledge} onChange=${(e) => setToKnowledge(e.target.checked)} />
+        <span>Also add this note to the project knowledge, so future summaries know</span></label>
+      <div class="row" style="margin-top:10px">
+        <button class="btn primary" disabled=${!note.trim()} onClick=${() => update("note")}>Update with this note</button>
+        <button class="btn" onClick=${() => update("rebuild")}>Rebuild from all meetings</button>
+        <button class="btn" onClick=${() => setMode(null)}>Cancel</button></div>
+      <div class="hint">“Update” revises the current state with your note (quick). “Rebuild” writes it again from every meeting's summary, oldest first, plus the project knowledge and your note, if any — use it after a big change of aim or context. Either way the old version stays in History.</div>
+    </div>`
+
+    : mode === "history" ? html`<div class="card">
+      <div class="row"><b>Earlier versions</b><span class="spacer"></span><button class="btn" onClick=${() => setMode(null)}>Close</button></div>
+      ${!history ? html`<div class="hint">Loading…</div>` : !history.length ? html`<div class="hint">No earlier versions yet.</div>`
+        : history.map((v) => html`<div class="histrow">
+          <div class="row"><span class="link" onClick=${() => setOpen(open === v.file ? null : v.file)}>${when(v.at)}</span>
+            <small class="m">${v.reason}</small><span class="spacer"></span>
+            <button class="btn" onClick=${() => restore(v.file)}>Restore</button></div>
+          ${open === v.file ? html`<div class="state small" dangerouslySetInnerHTML=${{ __html: md(v.text) }}></div>` : null}
+        </div>`)}
+    </div>`
+
+    : p.state ? html`<div class="state" dangerouslySetInnerHTML=${{ __html: md(p.state) }}></div>
+        ${p.stateUpdated ? html`<div class="hint">Updated ${when(p.stateUpdated.at)} ${p.stateUpdated.reason}</div>` : null}`
+    : html`<div class="hint">Written by the AI after each meeting is summarized, and kept up to date. You can edit it, or use Update… to describe the project yourself.</div>`}`;
 }
 
 function Meetings({ p }) {
@@ -883,6 +942,7 @@ function Summary({ m, job, summarize, jump }) {
     ${done.length ? html`<h4>Done since earlier meetings</h4>${list(done, (x) => html`<li><s>${x.text}</s>${x.closedBy.note ? html` <small>${x.closedBy.note}</small>` : null}</li>`)}` : null}
     ${s.progress.length ? html`<h4>Progress</h4>${list(s.progress, (x) => html`<li><b>${x.area}</b>: ${x.update}</li>`)}` : null}
     ${s.open_questions.length ? html`<h4>Open questions</h4>${list(s.open_questions, (x) => html`<li>${x}</li>`)}` : null}
+    ${s.updatedState === false ? html`<div class="hint">This is an older meeting, so re-summarizing it didn't change the project state. Use “Update…” on the project overview for that.</div>` : null}
     <div class="row hint" style="margin-top:18px">Written by ${s.writer || "Qwen3 8B on this Mac"} using the project's knowledge, state, to-dos and earlier meetings.
       <span class="spacer"></span><button class="btn" disabled=${!!job} onClick=${summarize}>${running ? "Summarizing…" : "Summarize again"}</button></div>
   </div>`;
