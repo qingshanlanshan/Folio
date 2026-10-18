@@ -48,6 +48,8 @@ class Parakeet:
                 break
             with GPU:
                 res = self.model.generate(get_logmel(audio[start:end], cfg))[0]
+            from . import runtime
+            runtime.touch()
             off = start / SR
             for t in res.tokens:
                 t.start += off

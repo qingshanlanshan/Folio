@@ -3,6 +3,7 @@ import json
 import re
 import threading
 
+from . import runtime
 from .asr import GPU
 
 MODEL = "mlx-community/Qwen3-8B-4bit"
@@ -14,18 +15,27 @@ def _model():
     with _load:
         if "m" not in _m:
             from mlx_lm import load
-            _m["m"] = load(MODEL)
+            _m["m"] = runtime.loading("llm", "Qwen3 8B (4-bit)", "Summaries, fixes, questions",
+                                      lambda: load(MODEL), lambda: _m.pop("m", None))
         return _m["m"]
 
 
 def chat(system: str, user: str, max_tokens: int = 2048, temp: float = 0.2) -> str:
-    from mlx_lm import generate
+    from mlx_lm import stream_generate
     from mlx_lm.sample_utils import make_sampler
     model, tok = _model()
     prompt = tok.apply_chat_template([{"role": "system", "content": system}, {"role": "user", "content": user}],
                                      add_generation_prompt=True, enable_thinking=False)
+    out = []
     with GPU:
-        return generate(model, tok, prompt, max_tokens=max_tokens, sampler=make_sampler(temp=temp), kv_bits=8)
+        runtime.touch()
+        # Small prefill steps with a check between them, so Stop also works while it reads the prompt.
+        for r in stream_generate(model, tok, prompt, max_tokens=max_tokens, sampler=make_sampler(temp=temp), kv_bits=8,
+                                 prefill_step_size=512, prompt_progress_callback=lambda *_: runtime.check()):
+            out.append(r.text)
+            runtime.check()                # lets "Stop" interrupt mid-answer
+        runtime.touch()
+    return "".join(out)
 
 
 def count_tokens(text: str) -> int:

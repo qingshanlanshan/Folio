@@ -30,7 +30,7 @@ const spkName = (t, spk) => {
   if (spk == null) return "Unknown";
   return t.speakers?.[spk]?.name || `Speaker ${spk < 26 ? String.fromCharCode(65 + spk) : spk}`;
 };
-const STEPS = { "listening again": "Listening again", "checking text": "Checking text", summarizing: "Summarizing", recording: "Recording", queued: "Queued", decoding: "Reading audio", transcribing: "Transcribing", speakers: "Finding speakers" };
+const STEPS = { stopped: "Stopped", "listening again": "Listening again", "checking text": "Checking text", summarizing: "Summarizing", recording: "Recording", queued: "Queued", decoding: "Reading audio", transcribing: "Transcribing", speakers: "Finding speakers" };
 
 let toastTimer;
 function toast(msg) {
@@ -84,6 +84,7 @@ function App() {
         : route[0] === "people" && route[1] ? html`<${Person} key=${route[1]} id=${route[1]} projects=${projects} />`
         : route[0] === "people" ? html`<${People} />`
         : route[0] === "search" ? html`<${Search} key=${route[1]} q=${route[1] || ""} />`
+        : route[0] === "activity" ? html`<${Activity} />`
         : html`<${Home} projects=${projects} />`}
     </main>
   </div>`;
@@ -119,21 +120,138 @@ function Sidebar({ projects, pid, route, reload }) {
       ? html`<form onSubmit=${create}><${FocusInput} placeholder="Project or course name" value=${name}
           onInput=${(e) => setName(e.target.value)} onBlur=${create} /></form>`
       : html`<div class="plink" onClick=${() => setAdding(true)} style="color:var(--muted)">+ New project</div>`}
-    <div class="quit"><button class="btn" onClick=${quitFolio}>Quit Folio</button></div>
+    <${StatusBar} />
   </nav>`;
 }
 
-async function quitFolio() {
-  let jobs = {}, live = null;
-  try { [jobs, live] = await Promise.all([api("/jobs"), api("/live")]); } catch {}
-  const busy = Object.values(jobs).map((j) => STEPS[j.step] || j.step);
-  let msg = "Quit Folio? The page stops working until you open Folio.app again.";
-  if (live && !live.done) msg = "A recording is in progress. Quit anyway? It will be stopped and saved, and transcribed next time you open Folio.";
-  else if (busy.length) msg = `Folio is still working (${busy.join(", ")}). Quit anyway? Transcriptions continue next time; unfinished fixes or summaries need starting again.`;
-  if (!confirm(msg)) return;
-  try { await api("/quit", { json: {} }); } catch {}
-  document.getElementById("app").innerHTML = `<div class="stopped"><img src="icon.svg" alt="">
-    <h1>Folio has stopped</h1><p>You can close this tab. To start again, open Folio.app or use your Folio bookmark.</p></div>`;
+// ---------- app status (one poller shared by the sidebar and the Activity page)
+
+// Each tab is a window of the app. It reports in while open, and says goodbye when closed, so
+// Folio knows when no window is open (and can notify you that it's still recording).
+const WINDOW = (crypto.randomUUID && crypto.randomUUID()) || String(Math.random()).slice(2);
+addEventListener("pagehide", () => {
+  try { navigator.sendBeacon("/api/window", new Blob([JSON.stringify({ id: WINDOW, closing: true })], { type: "application/json" })); } catch {}
+});
+
+const statusListeners = new Set();
+let lastStatus = null, statusTimer = null, stopped = false;
+async function pollStatus() {
+  clearTimeout(statusTimer);
+  if (stopped) return;
+  try {
+    lastStatus = await api(`/status?window=${WINDOW}`);
+    statusListeners.forEach((f) => f(lastStatus));
+  } catch {}
+  const busy = lastStatus && (lastStatus.recording || lastStatus.tasks.length);
+  statusTimer = setTimeout(pollStatus, document.hidden ? 8000 : busy ? 1500 : 4000);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) pollStatus(); });
+function useStatus() {
+  const [st, setSt] = useState(lastStatus);
+  useEffect(() => {
+    statusListeners.add(setSt);
+    if (!statusTimer) pollStatus();
+    return () => statusListeners.delete(setSt);
+  }, []);
+  return [st, pollStatus];
+}
+
+const gb = (x) => (x >= 0.1 ? `${x.toFixed(1)} GB` : `${Math.round(x * 1000)} MB`);
+
+function StatusBar() {
+  const [st] = useStatus();
+  if (!st) return html`<div class="statusbar"></div>`;
+  const task = st.tasks.find((t) => t.running);
+  const more = st.tasks.length - (task ? 1 : 0);
+  return html`<a class="statusbar" href="#/activity" title="Activity: tasks, memory, quit">
+    ${st.recording ? html`<div class="sline rec"><i class="recdot pulse"></i>Recording ${clock(st.recording.elapsed)}</div>` : null}
+    ${task ? html`<div class="sline">${task.stopping ? "Stopping…" : `${STEPS[task.step] || task.label} ${task.progress ? Math.round(task.progress * 100) + "%" : ""}`}
+      ${more ? html`<small> +${more} waiting</small>` : null}</div>` : null}
+    ${!st.recording && !task ? html`<div class="sline idle">Idle${st.models.length ? ` · ${gb(st.memory.modelsGB)} in memory` : ""}</div>` : null}
+    <div class="sline small">Activity & quit ›</div>
+  </a>`;
+}
+
+function Activity() {
+  const [st, refresh] = useStatus();
+  const [busy, setBusy] = useState("");
+  const call = async (label, path, body) => {
+    setBusy(label);
+    try { await api(path, { json: body }); } catch (e) { toast(e.message); }
+    setBusy(""); refresh();
+  };
+  const quit = async (force) => {
+    const rec = st?.recording, n = st?.tasks.length || 0;
+    const msg = force
+      ? "Force quit Folio now? Everything stops immediately. Audio already recorded is recovered next time; tasks in progress need starting again."
+      : rec ? `Quit Folio? “${rec.title}” is being recorded: it will be stopped, saved, and transcribed next time you open Folio.`
+      : n ? `Quit Folio? ${n} task${n > 1 ? "s are" : " is"} still running or waiting. Transcriptions continue next time; fixes and summaries need starting again.`
+      : "Quit Folio? It stops running until you open it again (Folio.app or your bookmark).";
+    if (!confirm(msg)) return;
+    stopped = true;
+    try { await api("/quit", { json: { force } }); } catch {}
+    document.getElementById("app").innerHTML = `<div class="stopped"><img src="icon.svg" alt="">
+      <h1>Folio has quit</h1><p>You can close this tab. To start again, open Folio.app or use your Folio bookmark.</p></div>`;
+  };
+  if (!st) return html`<div class="page"></div>`;
+  const s = st.settings;
+  const meetingLink = (pid, mid) => `#/p/${encodeURIComponent(pid)}/m/${encodeURIComponent(mid)}`;
+  return html`<div class="page activity">
+    <h1>Activity</h1>
+    <div class="sub">Closing this tab is like closing a window: recording and processing keep going. Quit stops Folio.</div>
+
+    <h3>Recording</h3>
+    ${st.recording ? html`<div class="card row">
+        <i class="recdot pulse"></i><b>${st.recording.title}</b><span class="elapsed">${clock(st.recording.elapsed)}</span>
+        <span class="spacer"></span>
+        <a class="btn" href=${meetingLink(st.recording.pid, st.recording.mid)}>Open</a>
+        <button class="btn rec" disabled=${st.recording.stopping || !!busy} onClick=${() => call("rec", "/live/stop", {})}>■ Stop recording</button>
+      </div>` : html`<div class="hint">Not recording.</div>`}
+
+    <h3>Tasks</h3>
+    ${st.tasks.length ? html`<div class="mlist">${st.tasks.map((t) => html`<div class="mrow task">
+        <a class="t" href=${meetingLink(t.project, t.meeting)}>${t.title}</a>
+        <span class="row">
+          <span class="badge">${t.stopping ? "Stopping…" : t.running ? `${STEPS[t.step] || t.label}${t.progress ? " " + Math.round(t.progress * 100) + "%" : ""}` : "Waiting"}</span>
+          <button class="btn" disabled=${t.stopping} onClick=${() => call(t.key, "/tasks/stop", { key: t.key })}>${t.running ? "Stop" : "Remove"}</button>
+        </span>
+        <span class="m">${t.label} · ${t.projectName}</span>
+        ${t.running ? html`<div class="bar"><i style=${`width:${Math.round((t.progress || 0) * 100)}%`}></i></div>` : null}
+      </div>`)}</div>
+      ${st.tasks.length > 1 ? html`<div class="row" style="margin-top:8px"><button class="btn" onClick=${() => call("all", "/tasks/stop", {})}>Stop all tasks</button></div>` : null}
+      <div class="hint">Stop takes effect at the next checkpoint (usually within seconds; a “listen again” pass may need up to a minute). Stopped transcriptions can be started again from the recording.</div>`
+      : html`<div class="hint">Nothing running.</div>`}
+
+    <h3>Memory</h3>
+    <div class="card">
+      ${st.models.length ? st.models.map((m) => html`<div class="row modelrow">
+          <span><b>${m.name}</b> <small>${m.purpose}</small></span><span class="spacer"></span>
+          <span class="m">${gb(m.gb)}</span>
+          <button class="btn" disabled=${!!busy} onClick=${() => call(m.id, "/models/unload", { id: m.id })}>Unload</button></div>`)
+        : html`<div class="hint" style="margin:0">No models loaded. They load when needed (a few seconds) and use several GB while loaded.</div>`}
+      <div class="row" style="margin-top:10px">
+        <span class="m">Folio is using about ${gb(st.memory.totalGB)} in total.</span><span class="spacer"></span>
+        ${st.models.length > 1 ? html`<button class="btn" disabled=${!!busy} onClick=${() => call("all", "/models/unload", {})}>Unload all</button>` : null}
+      </div>
+      <label class="row" style="margin-top:10px">Unload models after
+        <select value=${String(s.autoUnloadMinutes)} onChange=${async (e) => { await api("/settings", { method: "PUT", json: { autoUnloadMinutes: Number(e.target.value) } }); refresh(); }}>
+          ${[[5, "5 minutes"], [10, "10 minutes"], [30, "30 minutes"], [60, "1 hour"], [0, "never"]].map(([v, l]) => html`<option value=${String(v)}>${l}</option>`)}
+        </select> idle</label>
+    </div>
+
+    <h3>Folio</h3>
+    <div class="card">
+      <label class="row"><input type="checkbox" checked=${s.notifications}
+        onChange=${async (e) => { await api("/settings", { method: "PUT", json: { notifications: e.target.checked } }); refresh(); }} />
+        Notify me when no Folio window is open (still recording, transcript ready)</label>
+      <div class="row" style="margin-top:14px">
+        <button class="btn primary" onClick=${() => quit(false)}>Quit Folio</button>
+        <button class="btn danger" onClick=${() => quit(true)}>Force quit</button>
+        <span class="hint" style="margin:0">${st.windows > 1 ? `${st.windows} Folio windows are open.` : ""}</span>
+      </div>
+      <div class="hint">Quit stops and saves a recording and stops tasks cleanly (unfinished transcriptions resume next time). Force quit ends everything immediately.</div>
+    </div>
+  </div>`;
 }
 
 function Home({ projects }) {
@@ -572,7 +690,8 @@ function Meeting({ pid, mid, at }) {
         void el?.offsetWidth; el?.closest(".para")?.classList.add("flash");
       }} />` : t && m.correctionRuns?.length && !m.job ? html`<div class="hint" style="margin:-6px 0 12px">Last check (${m.correctionRuns.at(-1).mode}): ${m.correctionRuns.at(-1).found ? "all suggestions handled" : "nothing to fix"}.</div>` : null}
     ${t ? html`<${SpeakerBar} t=${t} open=${(e, k) => openMenu(e, k, null)} act=${act} />` : null}
-    ${!t ? html`<div class="empty">${m.job || m.status !== "error" ? "The transcript will appear here when processing finishes." : "Processing failed."}</div>` : html`
+    ${!t ? html`<div class="empty">${m.status === "stopped" ? html`Transcription was stopped. <button class="btn primary" onClick=${() => reprocess("process")}>Transcribe</button>`
+        : m.job || m.status !== "error" ? "The transcript will appear here when processing finishes." : "Processing failed."}</div>` : html`
       <div ref=${textRef}>
         ${m.paragraphs.map((p, pi) => html`<div class="para" key=${p.first}>
           <div class="who">

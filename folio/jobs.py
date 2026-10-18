@@ -6,10 +6,11 @@ import re
 import threading
 import time
 import traceback
+import uuid
 
 import numpy as np
 
-from . import audio, diarize, store, transcript
+from . import audio, diarize, runtime, store, transcript
 from .asr import Word
 
 ASR_MODEL = "parakeet"
@@ -27,19 +28,57 @@ def asr_model():
     with _load_lock:
         if "asr" not in _models:
             from .asr import BACKENDS
-            _models["asr"] = BACKENDS[ASR_MODEL]()
+            _models["asr"] = runtime.loading("asr", "Parakeet TDT 0.6B", "Speech to text",
+                                             BACKENDS[ASR_MODEL], lambda: _models.pop("asr", None))
         return _models["asr"]
 
 
 def submit(pid: str, mid: str, kind: str = "process", **opts) -> None:
     key = f"{pid}/{mid}"
+    jid = uuid.uuid4().hex[:8]
     with _lock:
         if key in _status:
             return
-        _status[key] = {"step": "queued", "progress": 0.0, "kind": kind}
+        _status[key] = {"step": "queued", "progress": 0.0, "kind": kind, "jid": jid, "queued": time.time()}
     if kind == "process":
         store.update_meeting(pid, mid, status="queued", error="")
-    _q.put({"pid": pid, "mid": mid, "kind": kind, **opts})
+    _q.put({"pid": pid, "mid": mid, "kind": kind, "jid": jid, **opts})
+
+
+def cancel(key: str) -> bool:
+    """Removes a queued task, or asks the running one to stop at its next checkpoint."""
+    with _lock:
+        st = _status.get(key)
+        if not st:
+            return False
+        queued = st["step"] == "queued" and not st.get("running")
+        if queued:
+            _status.pop(key)
+        else:
+            st["stopping"] = True
+    if queued:
+        _stopped(key, st["kind"])
+    else:
+        runtime.cancel(key)
+    return True
+
+
+def running() -> bool:
+    with _lock:
+        return any(v.get("running") for v in _status.values())
+
+
+def _stopped(key: str, kind: str) -> None:
+    pid, mid = key.split("/", 1)
+    if kind != "process":
+        return
+    try:
+        if runtime.quitting:
+            store.update_meeting(pid, mid, status="queued")      # resume next time
+        else:
+            store.update_meeting(pid, mid, status="stopped", error="Stopped before transcription finished.")
+    except store.NotFound:
+        pass
 
 
 def status() -> dict[str, dict]:
@@ -51,6 +90,7 @@ def set_step(key: str, step: str, progress: float = 0.0) -> None:
     with _lock:
         if key in _status:
             _status[key].update(step=step, progress=round(progress, 3))
+    runtime.check()
 
 
 # --- transcription + speakers
@@ -187,12 +227,18 @@ def _worker() -> None:
     from . import live
     while True:
         job = _q.get()
+        key = f"{job['pid']}/{job['mid']}"
         while live.active():
             time.sleep(1)
-        key = f"{job['pid']}/{job['mid']}"
+        with _lock:
+            st = _status.get(key)
+            if not st or st.get("jid") != job.get("jid"):
+                continue                     # removed from the queue
+            st["running"] = True
         t0 = time.time()
         ok = False
         main = job["kind"] in ("process", "speakers")
+        runtime.begin_job(key)
         try:
             if main:
                 store.update_meeting(job["pid"], job["mid"], status="processing")
@@ -201,6 +247,13 @@ def _worker() -> None:
             if main:
                 store.update_meeting(job["pid"], job["mid"], status="ready", error="",
                                      processedIn=round(time.time() - t0, 1))
+        except runtime.Cancelled:
+            if job["kind"] == "speakers":
+                try:
+                    store.update_meeting(job["pid"], job["mid"], status="ready")
+                except store.NotFound:
+                    pass
+            _stopped(key, job["kind"])
         except store.NotFound:
             pass  # deleted while queued
         except Exception as e:
@@ -213,13 +266,30 @@ def _worker() -> None:
             except store.NotFound:
                 pass
         finally:
+            runtime.end_job()
             with _lock:
                 _status.pop(key, None)
-        if ok and job["kind"] in FOLLOW_UP:
+        if not ok:
+            continue
+        if job["kind"] in FOLLOW_UP:
             try:
                 submit(job["pid"], job["mid"], FOLLOW_UP[job["kind"]])
             except store.NotFound:
                 pass
+        else:
+            _tell_done(job)
+
+
+DONE = {"process": "is transcribed", "speakers": "has new speaker labels", "summarize": "is transcribed and summarized",
+        "correct": "has been checked for fixes"}
+
+
+def _tell_done(job: dict) -> None:
+    try:
+        title = store.read_json(store.meeting_dir(job["pid"], job["mid"]) / "meeting.json")["title"]
+    except store.NotFound:
+        return
+    runtime.when_no_window("Folio", f"“{title}” {DONE.get(job['kind'], 'is done')}.")
 
 
 def start() -> None:

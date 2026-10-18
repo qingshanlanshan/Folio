@@ -1,8 +1,5 @@
 """HTTP API + the web UI (static files in web/, no build step)."""
-import os
 import shutil
-import signal
-import threading
 import time
 from pathlib import Path
 
@@ -11,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import correct, jobs, live, people, search, store, summarize, transcript
+from . import correct, jobs, live, people, runtime, search, store, summarize, transcript
 
 jobs.AFTER.append(people.match)
 jobs.HANDLERS["correct"] = correct.run
@@ -32,6 +29,7 @@ def _nf(request: Request, exc: store.NotFound):
 @app.on_event("startup")
 def _start():
     jobs.start()
+    runtime.start()
 
 
 # --- projects
@@ -405,23 +403,92 @@ def all_jobs():
     return jobs.status()
 
 
-@app.post("/api/quit")
-def quit_folio():
-    """Stops the server. A recording in progress is stopped and saved first; recordings waiting to be
-    transcribed resume next time (fixes and summaries in progress need starting again)."""
+# --- app: activity, models, windows, quit
+
+KIND = {"process": "Transcribing", "speakers": "Finding speakers", "correct": "Fixing transcript",
+        "summarize": "Summarizing"}
+
+
+@app.get("/api/status")
+def app_status(window: str = ""):
+    runtime.window_seen(window)
+    tasks = []
+    for key, st in jobs.status().items():
+        pid, mid = key.split("/", 1)
+        try:
+            title = store.read_json(store.meeting_dir(pid, mid) / "meeting.json")["title"]
+            pname = store.get_project(pid)["name"]
+        except store.NotFound:
+            title, pname = mid, pid
+        tasks.append({"key": key, "project": pid, "meeting": mid, "title": title, "projectName": pname,
+                      "kind": st["kind"], "label": KIND.get(st["kind"], st["kind"]), "step": st["step"],
+                      "progress": st["progress"], "running": bool(st.get("running")),
+                      "stopping": bool(st.get("stopping")), "queued": st.get("queued", 0)})
+    tasks.sort(key=lambda x: (not x["running"], x["queued"]))
     s = live.active()
+    rec = None
     if s:
-        s.stop()
+        st = s.state(len(s.events))
+        rec = {k: st[k] for k in ("pid", "mid", "title", "elapsed", "tracks", "stopping")}
+    return {"recording": rec, "tasks": tasks, "models": runtime.models(), "memory": runtime.memory(),
+            "settings": runtime.settings(), "windows": runtime.windows_open()}
 
-    def bye():
-        for _ in range(100):           # let a stopped recording finish saving (up to ~20 s)
-            if not live.active():
-                break
-            time.sleep(0.2)
-        time.sleep(0.3)                # let this response reach the browser
-        os.kill(os.getpid(), signal.SIGTERM)
 
-    threading.Thread(target=bye, daemon=True).start()
+class WindowIn(BaseModel):
+    id: str
+    closing: bool = False
+
+
+@app.post("/api/window")
+async def window_event(request: Request):
+    # Sent by sendBeacon when a tab closes, so the body arrives as text.
+    try:
+        body = WindowIn.model_validate_json(await request.body())
+    except ValueError:
+        raise HTTPException(400, "body")
+    runtime.window_seen(body.id, body.closing)
+    return {"ok": True}
+
+
+class CancelIn(BaseModel):
+    key: str | None = None        # "project/meeting"; none = everything
+
+
+@app.post("/api/tasks/stop")
+def stop_tasks(body: CancelIn):
+    keys = [body.key] if body.key else list(jobs.status())
+    return {"stopped": [k for k in keys if jobs.cancel(k)]}
+
+
+class UnloadIn(BaseModel):
+    id: str | None = None         # none = all models
+
+
+@app.post("/api/models/unload")
+def unload_models(body: UnloadIn):
+    try:
+        return {"unloaded": runtime.unload(body.id), "memory": runtime.memory()}
+    except RuntimeError:
+        raise HTTPException(409, "That model is in use right now. Stop the task using it, or try again when it finishes.")
+
+
+class SettingsIn(BaseModel):
+    autoUnloadMinutes: int | None = None
+    notifications: bool | None = None
+
+
+@app.put("/api/settings")
+def edit_settings(body: SettingsIn):
+    return runtime.save_settings(**body.model_dump())
+
+
+class QuitIn(BaseModel):
+    force: bool = False
+
+
+@app.post("/api/quit")
+def quit_folio(body: QuitIn):
+    runtime.quit(body.force)
     return {"ok": True}
 
 
