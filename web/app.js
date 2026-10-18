@@ -119,7 +119,21 @@ function Sidebar({ projects, pid, route, reload }) {
       ? html`<form onSubmit=${create}><${FocusInput} placeholder="Project or course name" value=${name}
           onInput=${(e) => setName(e.target.value)} onBlur=${create} /></form>`
       : html`<div class="plink" onClick=${() => setAdding(true)} style="color:var(--muted)">+ New project</div>`}
+    <div class="quit"><button class="btn" onClick=${quitFolio}>Quit Folio</button></div>
   </nav>`;
+}
+
+async function quitFolio() {
+  let jobs = {}, live = null;
+  try { [jobs, live] = await Promise.all([api("/jobs"), api("/live")]); } catch {}
+  const busy = Object.values(jobs).map((j) => STEPS[j.step] || j.step);
+  let msg = "Quit Folio? The page stops working until you open Folio.app again.";
+  if (live && !live.done) msg = "A recording is in progress. Quit anyway? It will be stopped and saved, and transcribed next time you open Folio.";
+  else if (busy.length) msg = `Folio is still working (${busy.join(", ")}). Quit anyway? Transcriptions continue next time; unfinished fixes or summaries need starting again.`;
+  if (!confirm(msg)) return;
+  try { await api("/quit", { json: {} }); } catch {}
+  document.getElementById("app").innerHTML = `<div class="stopped"><img src="icon.svg" alt="">
+    <h1>Folio has stopped</h1><p>You can close this tab. To start again, open Folio.app or use your Folio bookmark.</p></div>`;
 }
 
 function Home({ projects }) {

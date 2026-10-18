@@ -1,5 +1,8 @@
 """HTTP API + the web UI (static files in web/, no build step)."""
+import os
 import shutil
+import signal
+import threading
 import time
 from pathlib import Path
 
@@ -400,6 +403,26 @@ def live_stop():
 @app.get("/api/jobs")
 def all_jobs():
     return jobs.status()
+
+
+@app.post("/api/quit")
+def quit_folio():
+    """Stops the server. A recording in progress is stopped and saved first; recordings waiting to be
+    transcribed resume next time (fixes and summaries in progress need starting again)."""
+    s = live.active()
+    if s:
+        s.stop()
+
+    def bye():
+        for _ in range(100):           # let a stopped recording finish saving (up to ~20 s)
+            if not live.active():
+                break
+            time.sleep(0.2)
+        time.sleep(0.3)                # let this response reach the browser
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    threading.Thread(target=bye, daemon=True).start()
+    return {"ok": True}
 
 
 app.mount("/", StaticFiles(directory=ROOT / "web", html=True), name="web")

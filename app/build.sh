@@ -1,5 +1,6 @@
 #!/bin/sh
 # Builds dist/Folio.app: a launcher that starts the engine (if needed) and opens the UI in the browser.
+# It also answers folio:// links, so a browser bookmark to folio://open starts Folio from anywhere.
 # Launching through the app makes macOS ask for microphone / system-audio access in Folio's name.
 set -e
 cd "$(dirname "$0")/.."
@@ -20,6 +21,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>LSMinimumSystemVersion</key><string>14.4</string>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>Folio</string>
+    <key>CFBundleURLSchemes</key><array><string>folio</string></array>
+  </dict></array>
   <key>NSMicrophoneUsageDescription</key><string>Folio records your meetings and lectures to transcribe them on this Mac.</string>
   <key>NSAudioCaptureUsageDescription</key><string>Folio records the other side of online meetings to transcribe them on this Mac.</string>
 </dict></plist>
@@ -51,4 +56,6 @@ if [ -f "$TMP/icon.svg.png" ]; then
 fi
 rm -rf "$TMP"
 codesign --force --deep --sign - "$APP" >/dev/null 2>&1
+# Tell Launch Services about the folio:// scheme.
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP"
 echo "built $APP"
