@@ -1,1 +1,1 @@
-Folio 0.3.0: a cleaner, modern look, and optional sync with the Mac app through your own Cloudflare R2 storage (Settings → Sync).
+Folio 0.3.1: Scan code no longer crashes (new scanner that also works without Google Play), and your Claude API key syncs with your other devices.

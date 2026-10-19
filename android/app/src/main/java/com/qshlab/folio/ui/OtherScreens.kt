@@ -54,9 +54,9 @@ import com.qshlab.folio.ai.Search
 import com.qshlab.folio.speech.MODELS
 import com.qshlab.folio.sync.Sync
 import com.qshlab.folio.update.Updates
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import androidx.activity.compose.rememberLauncherForActivityResult
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -296,12 +296,11 @@ fun SyncSection() {
             if (err == null) { mode = null; secret = ""; code = "" }
         }
     }
-    fun scan() {
-        val opts = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
-        GmsBarcodeScanning.getClient(ctx, opts).startScan()
-            .addOnSuccessListener { b -> b.rawValue?.let { v -> act { Sync.join(v) } } }
-            .addOnFailureListener { err = "Couldn't open the scanner. Paste the code instead." }
-    }
+    val scanner = rememberLauncherForActivityResult(ScanContract()) { r -> r.contents?.let { v -> act { Sync.join(v) } } }
+    fun scan() = runCatching {
+        scanner.launch(ScanOptions().setDesiredBarcodeFormats(ScanOptions.QR_CODE).setBeepEnabled(false)
+            .setOrientationLocked(false).setPrompt("Point at the code in Folio on your Mac: Settings → Sync → Code for another device"))
+    }.onFailure { err = "Couldn't open the camera. Paste the code instead." }
 
     Text("Sync", fontFamily = Heading, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
     val c = cfg
@@ -350,7 +349,7 @@ fun SyncSection() {
         Text((if (d.platform == "android") "📱 " else "💻 ") + d.name + (if (d.me) " (this phone)" else ""), Modifier.weight(1f))
         if (!d.me) Hint("seen ${ago(d.seen)}")
     }
-    Hint("Synced: projects, finished recordings (audio, transcript, summary) and people. Deleting on one device moves it to the trash on the others.")
+    Hint("Synced: projects, finished recordings (audio, transcript, summary), people and your Claude API key. Deleting on one device moves it to the trash on the others.")
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
         OutlinedButton({ Sync.kick() }, enabled = !st.running) { Text("Sync now") }
         OutlinedButton({ showCode = true }) { Text("Code for another device") }

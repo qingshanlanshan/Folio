@@ -78,7 +78,7 @@ object Sync {
     private const val INTERVAL_MS = 5 * 60_000L
     private val SYNCED = Regex("""^(projects/[^/]+/(project\.json|project\.md|glossary\.tsv|state\.md|todos\.json|state-history/[^/]+\.(md|json))""" +
         """|projects/[^/]+/meetings/[^/]+/(meeting\.json|transcript\.json|summary\.json|corrections\.json|audio\.m4a|voices\.json)""" +
-        """|people/[^/]+\.json)$""")
+        """|people/[^/]+\.json|anthropic-key)$""")
     private val META = setOf("meeting.json", "project.json")
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -235,6 +235,7 @@ object Sync {
             }
         }
         candidates += File(home, "people").listFiles().orEmpty()
+        candidates += File(home, "anthropic-key")
         val files = mutableMapOf<String, File>()
         for (f in candidates) {
             if (!f.isFile) continue

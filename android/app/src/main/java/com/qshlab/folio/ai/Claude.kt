@@ -16,6 +16,7 @@ import com.anthropic.models.beta.messages.MessageCreateParams
 import com.qshlab.folio.data.readJson
 import com.qshlab.folio.data.writeJson
 import kotlinx.serialization.Serializable
+import com.qshlab.folio.data.writeAtomic
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -48,9 +49,21 @@ class Claude(ctx: Context, private val home: File) {
     private var clientKey: String? = null
     private val usageFile get() = File(home, "claude-usage.json")
 
+    // In Folio/anthropic-key (private to the app), the same file as on the Mac, so sync can share it.
+    private val keyFile get() = File(home, "anthropic-key")
+
+    init {   // keys saved by 0.3.0 and earlier lived in the app's preferences
+        prefs.getString("key", null)?.takeIf { it.isNotBlank() }?.let { if (!keyFile.exists()) keyFile.writeAtomic(it.trim()) }
+        prefs.edit().remove("key").apply()
+    }
+
     var key: String?
-        get() = prefs.getString("key", null)?.takeIf { it.isNotBlank() }
-        set(v) { prefs.edit().putString("key", v?.trim()).apply(); client = null }
+        get() = keyFile.takeIf { it.exists() }?.readText()?.trim()?.takeIf { it.isNotBlank() }
+        set(v) {
+            if (v.isNullOrBlank()) keyFile.delete() else keyFile.writeAtomic(v.trim())
+            client = null
+            com.qshlab.folio.sync.Sync.kick()
+        }
 
     var modelId: String
         get() = prefs.getString("model", null)?.takeIf { id -> CLAUDE_MODELS.any { it.id == id } } ?: CLAUDE_MODELS[0].id

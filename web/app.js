@@ -389,8 +389,8 @@ function SyncCard() {
       ${s.error ? html`<div class="hint errtext">${s.error}</div>` : null}
       ${s.devices?.length ? html`<div class="devices">${s.devices.map((d) => html`<div class="row"><span>${d.platform === "android" ? "📱" : "💻"} ${d.name}${d.me ? " (this Mac)" : ""}</span>
           <span class="spacer"></span><span class="m">${d.me ? "" : `seen ${ago(d.seen)}`}</span></div>`)}</div>` : null}
-      <div class="hint">Synced: projects, finished recordings (audio, transcript, summary) and people. Raw recording tracks stay on
-        each device. Deleting on one device moves it to the Trash on the others.</div>
+      <div class="hint">Synced: projects, finished recordings (audio, transcript, summary), people and your Claude API key. Raw
+        recording tracks stay on each device. Deleting on one device moves it to the Trash on the others.</div>
       <div class="row" style="margin-top:12px">
         <button class="btn" onClick=${showCode}>${code ? "Hide code" : "Code for another device"}</button><span class="spacer"></span>
         <button class="btn danger" onClick=${off}>Turn off sync</button></div>
@@ -474,7 +474,7 @@ function Settings() {
         <button class="btn primary" disabled=${!key.trim()}>Save key</button>
         ${s.claudeKey?.source === "folio" ? html`<button type="button" class="btn danger" onClick=${() => confirm("Remove the saved API key?") && saveKey("")}>Remove</button>` : null}
       </form>
-      <div class="hint">Get a key at console.anthropic.com → API keys. It's stored in ~/Folio/anthropic-key, readable only by you.</div>
+      <div class="hint">Get a key at console.anthropic.com → API keys. It's stored in ~/Folio/anthropic-key, readable only by you. With sync on, your other devices get it too (encrypted).</div>
       <div class="row" style="margin-top:10px">
         <button class="btn" disabled=${!s.claudeKey || testing} onClick=${runTest}>${testing ? "Testing…" : "Test connection"}</button>
         ${test ? html`<span class=${"m" + (test.ok ? "" : " errtext")}>${test.ok ? `✓ ${test.model} answered in ${test.seconds}s` : test.error}</span>` : null}

@@ -13,7 +13,8 @@ keys, so they never overwrite each other. For each path the change with the high
 
 What syncs (paths are the same on every device): projects (settings, notes, glossary, state + history,
 to-dos) and their finished recordings (meeting.json, transcript, summary, fixes, audio.m4a, voices),
-and people with their voice prints. Raw recordings (mic/system tracks, originals) stay on the device.
+and people with their voice prints, and the Claude API key (like everything, encrypted before upload).
+Raw recordings (mic/system tracks, originals) stay on the device.
 On the Mac, voice prints are .npy/.npz files; they sync as the JSON the Android app uses.
 """
 import base64
@@ -44,6 +45,7 @@ SYNCED = re.compile(r"""^(
     projects/[^/]+/(project\.json|project\.md|glossary\.tsv|state\.md|todos\.json|state-history/[^/]+\.(md|json))
   | projects/[^/]+/meetings/[^/]+/(meeting\.json|transcript\.json|summary\.json|corrections\.json|audio\.m4a|voices\.json)
   | people/[^/]+\.json
+  | anthropic-key
 )$""", re.X)
 META = ("meeting.json", "project.json")     # written last, removed first: they make a folder show up
 
@@ -236,6 +238,8 @@ def _write(path: str, data: bytes) -> Path:
     else:
         tmp.write_bytes(data)
     tmp.replace(f)
+    if path == "anthropic-key":
+        os.chmod(f, 0o600)                       # readable only by you, like when you save it
     if path.endswith("/summary.json"):           # the Mac also keeps a readable copy
         from .summarize import render
         try:
@@ -269,6 +273,8 @@ def _scan() -> tuple[dict[str, Path], set[str]]:
         rel = d.relative_to(home).as_posix() + "/"
         if store.read_json(d / "meeting.json", default={}).get("status") != "ready":
             skip.add(rel)
+    if (home / "anthropic-key").is_file():
+        files["anthropic-key"] = home / "anthropic-key"
     for f in list((home / "projects").glob("*/*")) + list((home / "projects").glob("*/state-history/*")) \
             + list((home / "projects").glob("*/meetings/*/*")) + list((home / "people").glob("*")):
         if not f.is_file():
