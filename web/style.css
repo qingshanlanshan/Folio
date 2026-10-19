@@ -39,10 +39,23 @@ button, input, textarea, select { font: inherit; color: inherit; }
 a { color: inherit; text-decoration: none; }
 
 .layout { display: grid; grid-template-columns: 240px 1fr; height: 100vh; }
-.side { display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); padding: 16px 10px; overflow-y: auto; }
+.side { display: flex; flex-direction: column; background: var(--side); border-right: 1px solid var(--line); padding: 16px 10px 10px; overflow: hidden; }
+/* fixed places (Record, Unsorted, People, Settings): icon + label, a step bolder than projects */
+.nav { display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 7px; font-weight: 550; }
+.nav:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.nav.on { background: var(--accent-soft); color: var(--accent); }
+.nav small { margin-left: auto; color: var(--muted); font-weight: 400; }
+.ico { width: 17px; height: 17px; flex: none; color: var(--muted); }
+.nav.on .ico { color: var(--accent); }
+.navgroup { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+/* the project list scrolls between the fixed top and bottom */
+.sidelist { flex: 1; min-height: 0; overflow-y: auto; padding-top: 6px; margin: 0 -4px; padding-left: 4px; padding-right: 4px; }
+.sidelist .plink { padding-left: 10px; }
+.addproj { color: var(--muted); }
+.sidefoot { border-top: 1px solid var(--line); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 16px; padding: 0 8px 14px; }
 .brand img { width: 22px; height: 22px; }
-.side h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 8px 8px 6px; font-weight: 600; }
+.side h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 8px 8px 4px; font-weight: 600; }
 .plink { display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border-radius: 7px; cursor: pointer; }
 .plink:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); }
 .plink.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
@@ -199,7 +212,7 @@ h3 { font: 600 17px var(--serif); }
 .summary small { color: var(--muted); font-family: var(--font); }
 .tabs .badge { font-size: 10.5px; padding: 0 6px; }
 
-.statusbar { margin-top: auto; display: block; padding: 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel); font-size: 13px; }
+.statusbar { display: block; padding: 10px; border-radius: 9px; border: 1px solid var(--line); background: var(--panel); font-size: 13px; }
 .statusbar:hover { border-color: color-mix(in srgb, var(--ink) 25%, var(--line)); }
 .sline { display: flex; align-items: center; gap: 6px; }
 .sline.rec { color: #d23b2e; font-weight: 600; }

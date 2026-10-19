@@ -117,25 +117,43 @@ function Sidebar({ projects, pid, route, reload }) {
     } catch (err) { toast(err.message); }
     creating.current = false;
   };
+  const builtin = (projects || []).find((p) => p.builtin);
   return html`<nav class="side">
     <a class="brand" href="#/"><img src="icon.svg" alt="" />Folio</a>
     <form onSubmit=${(e) => { e.preventDefault(); if (q.trim()) location.hash = "#/search/" + encodeURIComponent(q.trim()); }}>
       <input type="search" placeholder="Search words or names" value=${q} onInput=${(e) => setQ(e.target.value)} />
     </form>
-    <a class=${"plink rec-link" + (!route[0] ? " on" : "")} href="#/"><span><i class="recdot"></i> Record</span></a>
-    ${(projects || []).filter((p) => p.builtin).map((p) => html`<a class=${"plink" + (p.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(p.id)}>
-      <span>Unsorted</span><small>${p.meetings || ""}</small></a>`)}
-    <a class=${"plink" + (route[0] === "people" ? " on" : "")} href="#/people"><span>People</span></a>
-    <a class=${"plink" + (route[0] === "settings" ? " on" : "")} href="#/settings"><span>Settings</span></a>
-    <h4>Projects</h4>
-    ${(projects || []).filter((p) => !p.builtin).map((p) => html`<a class=${"plink" + (p.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(p.id)}>
-      <span>${p.name}</span><small>${p.meetings || ""}</small></a>`)}
-    ${adding
-      ? html`<form onSubmit=${create}><${FocusInput} placeholder="Project or course name" value=${name}
-          onInput=${(e) => setName(e.target.value)} onBlur=${create} /></form>`
-      : html`<div class="plink" onClick=${() => setAdding(true)} style="color:var(--muted)">+ New project</div>`}
-    <${StatusBar} />
+    <div class="navgroup">
+      <a class=${"nav" + (!route[0] ? " on" : "")} href="#/"><${Icon} name="record" />Record</a>
+      ${builtin ? html`<a class=${"nav" + (builtin.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(builtin.id)}>
+        <${Icon} name="inbox" />Unsorted<small>${builtin.meetings || ""}</small></a>` : null}
+      <a class=${"nav" + (route[0] === "people" ? " on" : "")} href="#/people"><${Icon} name="people" />People</a>
+    </div>
+    <div class="sidelist">
+      <h4>Projects</h4>
+      ${(projects || []).filter((p) => !p.builtin).map((p) => html`<a class=${"plink" + (p.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(p.id)}>
+        <span>${p.name}</span><small>${p.meetings || ""}</small></a>`)}
+      ${adding
+        ? html`<form onSubmit=${create}><${FocusInput} placeholder="Project or course name" value=${name}
+            onInput=${(e) => setName(e.target.value)} onBlur=${create} /></form>`
+        : html`<div class="plink addproj" onClick=${() => setAdding(true)}>+ New project</div>`}
+    </div>
+    <div class="sidefoot">
+      <a class=${"nav" + (route[0] === "settings" ? " on" : "")} href="#/settings"><${Icon} name="gear" />Settings</a>
+      <${StatusBar} />
+    </div>
   </nav>`;
+}
+
+// Small line icons for the sidebar's fixed places, so they read differently from projects.
+const ICONS = {
+  record: () => html`<circle cx="12" cy="12" r="5" fill="#d23b2e" stroke="none" /><circle cx="12" cy="12" r="9" />`,
+  inbox: () => html`<path d="M3 13h5l1.5 2.5h5L16 13h5" /><path d="M5 5h14l2 8v6H3v-6z" />`,
+  people: () => html`<circle cx="9" cy="8" r="3.5" /><path d="M2.5 20c.5-4 3.2-6 6.5-6s6 2 6.5 6" /><circle cx="17" cy="9" r="2.5" /><path d="M16.5 14c2.8.2 4.6 2 5 5" />`,
+  gear: () => html`<circle cx="12" cy="12" r="3" /><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1" />`,
+};
+function Icon({ name }) {
+  return html`<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]()}</svg>`;
 }
 
 // ---------- app status (one poller shared by the sidebar and the Activity page)
