@@ -240,12 +240,12 @@ function Activity() {
       ? "Force quit Folio now? Everything stops immediately. Audio already recorded is recovered next time; tasks in progress need starting again."
       : rec ? `Quit Folio? “${rec.title}” is being recorded: it will be stopped, saved, and transcribed next time you open Folio.`
       : n ? `Quit Folio? ${n} task${n > 1 ? "s are" : " is"} still running or waiting. Transcriptions continue next time; fixes and summaries need starting again.`
-      : "Quit Folio? It stops running until you open it again (Folio.app or your bookmark).";
+      : "Quit Folio? It stops running until you open it again.";
     if (!confirm(msg)) return;
     stopped = true;
     try { await api("/quit", { json: { force } }); } catch {}
     document.getElementById("app").innerHTML = `<div class="stopped"><img src="icon.svg" alt="">
-      <h1>Folio has quit</h1><p>You can close this tab. To start again, open Folio.app or use your Folio bookmark.</p></div>`;
+      <h1>Folio has quit</h1><p>To start again, open Folio.</p></div>`;
   };
   if (!st) return html`<div class="page"></div>`;
   const s = st.settings;

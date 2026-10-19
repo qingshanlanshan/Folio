@@ -108,11 +108,13 @@ def install() -> None:
         _state["step"] = "Restarting"
         script = stage / "swap.sh"
         script.write_text(f"""#!/bin/sh
-# Wait for Folio to quit, put the new app in place (keeping the old one if anything fails), reopen.
+# Wait for Folio (engine and app) to quit, put the new app in place (keeping the old one if anything
+# fails), reopen.
 while kill -0 {os.getpid()} 2>/dev/null; do sleep 0.2; done
 APP={_q(APP)}; NEW={_q(new)}; OLD={_q(stage / "Folio-old.app")}
+i=0; while pgrep -f "$APP/Contents/MacOS/Folio$" >/dev/null && [ $i -lt 150 ]; do sleep 0.2; i=$((i+1)); done
 if mv "$APP" "$OLD" && mv "$NEW" "$APP"; then rm -rf "$OLD"; else [ -d "$APP" ] || mv "$OLD" "$APP"; fi
-open "$APP" --args --after-update
+open "$APP"
 """)
         subprocess.Popen(["/bin/sh", str(script)], start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

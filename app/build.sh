@@ -1,6 +1,6 @@
 #!/bin/sh
 # Builds the Mac app for download and in-app updates:
-#   dist/Folio.app              the app (launcher + capture helper + engine code + web UI)
+#   dist/Folio.app              the app (window + capture helper + engine code + web UI)
 #   dist/Folio-mac.dmg          for the download page (drag to Applications)
 #   dist/Folio-mac-<v>.zip      what the in-app updater downloads
 #   dist/mac.json               the update feed (version, zip URL, SHA-256)
@@ -16,7 +16,7 @@ SIGN=app/signing
 rm -rf "$APP" dist/Folio-mac*.zip dist/Folio-mac.dmg
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/engine"
 
-swiftc -O -o "$APP/Contents/MacOS/Folio" app/launcher/main.swift
+swiftc -O -o "$APP/Contents/MacOS/Folio" app/launcher/*.swift
 swiftc -O -o "$APP/Contents/MacOS/folio-capture" capture/main.swift \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker capture/Info.plist
 
@@ -40,7 +40,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$V</string>
   <key>LSMinimumSystemVersion</key><string>14.4</string>
   <key>LSArchitecturePriority</key><array><string>arm64</string></array>
-  <key>LSUIElement</key><true/>
   <key>NSHumanReadableCopyright</key><string>© 2026 qshlab</string>
   <key>CFBundleURLTypes</key><array><dict>
     <key>CFBundleURLName</key><string>Folio</string>

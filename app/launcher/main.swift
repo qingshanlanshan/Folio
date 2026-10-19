@@ -1,5 +1,6 @@
-// Folio.app: sets up the engine on first launch (and after updates that need new parts), starts it if
-// it isn't running, and opens Folio in the browser. Also answers folio:// links.
+// Folio.app: a Mac app around Folio's engine. On first launch (and after updates that need new parts) it
+// installs the engine; then it starts the engine and shows Folio in its own window. Closing the window
+// keeps Folio running (recordings carry on); Quit stops the engine too. Also answers folio:// links.
 import AppKit
 
 let env = ProcessInfo.processInfo.environment
@@ -10,14 +11,18 @@ let port = env["FOLIO_PORT"] ?? "8765"
 let support = URL(fileURLWithPath: env["FOLIO_SUPPORT"]
     ?? NSHomeDirectory() + "/Library/Application Support/Folio")
 let logs = URL(fileURLWithPath: NSHomeDirectory() + "/Library/Logs")
-let afterUpdate = CommandLine.arguments.contains("--after-update")
 
 func read(_ url: URL) -> String? { try? String(contentsOf: url, encoding: .utf8) }
 
-/// GET /api/status, nil if Folio isn't answering.
-func status() -> [String: Any]? {
-    var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/status")!)
-    req.timeoutInterval = 1
+/// Calls the engine; nil if it isn't answering.
+func engine(_ path: String, post: String? = nil, timeout: TimeInterval = 1) -> [String: Any]? {
+    var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/api/\(path)")!)
+    req.timeoutInterval = timeout
+    if let post {
+        req.httpMethod = "POST"
+        req.httpBody = post.data(using: .utf8)
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    }
     var out: [String: Any]?
     let done = DispatchSemaphore(value: 0)
     URLSession.shared.dataTask(with: req) { data, resp, _ in
@@ -30,92 +35,19 @@ func status() -> [String: Any]? {
     return out
 }
 
-final class Setup: NSObject {
-    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 190),
-                          styleMask: [.titled], backing: .buffered, defer: false)
-    let title = NSTextField(labelWithString: "Setting up Folio")
-    let detail = NSTextField(wrappingLabelWithString: "")
-    let step = NSTextField(labelWithString: "Starting…")
-    let bar = NSProgressIndicator()
-    let quit = NSButton(title: "Quit", target: nil, action: nil)
-    let retry = NSButton(title: "Try Again", target: nil, action: nil)
-    var onRetry: (() -> Void)?
-
-    override init() {
-        super.init()
-        window.title = "Folio"
-        let icon = NSImageView(image: NSApp.applicationIconImage)
-        title.font = .boldSystemFont(ofSize: 15)
-        detail.stringValue = "This happens once. Folio downloads Python and its speech engine (about 1.5 GB) "
-            + "so everything runs on this Mac. It takes a few minutes."
-        detail.textColor = .secondaryLabelColor
-        step.textColor = .secondaryLabelColor
-        step.lineBreakMode = .byTruncatingTail
-        bar.isIndeterminate = true
-        bar.style = .bar
-        quit.target = NSApp
-        quit.action = #selector(NSApplication.terminate(_:))
-        retry.target = self
-        retry.action = #selector(again)
-        retry.keyEquivalent = "\r"
-        retry.isHidden = true
-        let text = NSStackView(views: [title, detail, bar, step])
-        text.orientation = .vertical
-        text.alignment = .leading
-        text.spacing = 8
-        let row = NSStackView(views: [icon, text])
-        row.alignment = .top
-        row.spacing = 16
-        let buttons = NSStackView(views: [quit, retry])
-        let all = NSStackView(views: [row, buttons])
-        all.orientation = .vertical
-        all.alignment = .trailing
-        all.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 16, right: 20)
-        window.contentView = all
-        NSLayoutConstraint.activate([
-            icon.widthAnchor.constraint(equalToConstant: 64), icon.heightAnchor.constraint(equalToConstant: 64),
-            text.widthAnchor.constraint(equalToConstant: 360), bar.widthAnchor.constraint(equalTo: text.widthAnchor),
-            detail.widthAnchor.constraint(equalTo: text.widthAnchor), step.widthAnchor.constraint(equalTo: text.widthAnchor),
-        ])
-    }
-
-    func show() {
-        NSApp.setActivationPolicy(.regular)
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
-        bar.startAnimation(nil)
-    }
-
-    func failed(_ message: String) {
-        bar.stopAnimation(nil)
-        bar.isHidden = true
-        title.stringValue = "Setup didn't finish"
-        step.lineBreakMode = .byWordWrapping
-        step.maximumNumberOfLines = 0
-        step.stringValue = message
-        retry.isHidden = false
-    }
-
-    @objc func again() {
-        retry.isHidden = true
-        title.stringValue = "Setting up Folio"
-        step.lineBreakMode = .byTruncatingTail
-        step.maximumNumberOfLines = 1
-        bar.isHidden = false
-        bar.startAnimation(nil)
-        onRetry?()
-    }
-}
+func status() -> [String: Any]? { engine("status") }
 
 final class App: NSObject, NSApplicationDelegate {
     var setup: Setup?
+    let main = MainWindow()
+    var up = false               // the engine has answered at least once
+    var quitting = false
+    var misses = 0
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        buildMenu()
         // Opened straight from Downloads, macOS runs a read-only copy that couldn't update itself.
         if bundle.bundlePath.contains("/AppTranslocation/") {
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate(ignoringOtherApps: true)
             let a = NSAlert()
             a.messageText = "Move Folio to Applications"
             a.informativeText = "Drag Folio into your Applications folder, then open it from there."
@@ -123,12 +55,9 @@ final class App: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
-        if status() != nil { return finish(start: false) }
+        if status() != nil { return ready() }
         let want = read(res.appendingPathComponent("setup-stamp"))
-        if want != nil, want == read(support.appendingPathComponent("ready")) {
-            DispatchQueue.global().async { self.finish(start: true) }
-            return
-        }
+        if want != nil, want == read(support.appendingPathComponent("ready")) { return start() }
         let s = Setup()
         setup = s
         s.onRetry = { [weak self] in self?.runSetup() }
@@ -136,8 +65,84 @@ final class App: NSObject, NSApplicationDelegate {
         runSetup()
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        if up { main.showInterface() }
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
     func application(_ app: NSApplication, open urls: [URL]) {
-        // folio://open: launching is all it takes; if Folio was already set up, the browser opens.
+        if up { main.showInterface() }      // folio://open
+    }
+
+    // --- engine
+
+    func start() {
+        main.showLoading()
+        DispatchQueue.global().async {
+            self.launchEngine()
+            var ok = false
+            for _ in 0..<300 where !ok {    // the first start loads a lot of Python; give it a minute
+                ok = status() != nil
+                if !ok { Thread.sleep(forTimeInterval: 0.2) }
+            }
+            DispatchQueue.main.async {
+                if ok { return self.ready() }
+                let a = NSAlert()
+                a.messageText = "Folio didn't start"
+                a.informativeText = "See ~/Library/Logs/Folio.log for details."
+                a.runModal()
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
+    func ready() {
+        up = true
+        setup?.window.close()
+        setup = nil
+        main.showInterface()
+        // If the engine stops (Quit in Folio's Activity page, or an update restarting it), the app goes too.
+        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            guard let self, !self.quitting else { return }
+            DispatchQueue.global().async {
+                let alive = status() != nil
+                DispatchQueue.main.async {
+                    self.misses = alive ? 0 : self.misses + 1
+                    if self.misses >= 3 { self.quitting = true; NSApp.terminate(nil) }
+                }
+            }
+        }
+    }
+
+    func launchEngine() {
+        let p = Process()
+        p.executableURL = support.appendingPathComponent("venv/bin/python")
+        p.arguments = ["-m", "folio"]
+        var e = env
+        e["PYTHONPATH"] = res.appendingPathComponent("engine").path
+        e["PYTHONDONTWRITEBYTECODE"] = "1"
+        e["FOLIO_APP"] = bundle.bundlePath
+        e["FOLIO_VERSION"] = appVersion
+        e["FOLIO_SUPPORT"] = support.path
+        e["FOLIO_MODELS"] = support.appendingPathComponent("models").path
+        e["FOLIO_CAPTURE"] = bundle.bundleURL.appendingPathComponent("Contents/MacOS/folio-capture").path
+        e["FOLIO_PORT"] = port
+        p.environment = e
+        p.currentDirectoryURL = support
+        try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true)
+        let logURL = logs.appendingPathComponent("Folio.log")
+        if !FileManager.default.fileExists(atPath: logURL.path) {
+            FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        }
+        if let log = try? FileHandle(forWritingTo: logURL) {
+            log.seekToEndOfFile()
+            p.standardOutput = log
+            p.standardError = log
+        }
+        p.standardInput = FileHandle.nullDevice
+        try? p.run()
     }
 
     func runSetup() {
@@ -170,8 +175,9 @@ final class App: NSObject, NSApplicationDelegate {
             try? log?.close()
             DispatchQueue.main.async {
                 if p.terminationStatus == 0 {
-                    self.setup?.step.stringValue = "Starting Folio…"
-                    DispatchQueue.global().async { self.finish(start: true) }
+                    self.setup?.window.close()
+                    self.setup = nil
+                    self.start()
                 } else {
                     self.setup?.failed((last.isEmpty ? "Something went wrong." : last)
                         + " Details: ~/Library/Logs/Folio-setup.log")
@@ -181,58 +187,106 @@ final class App: NSObject, NSApplicationDelegate {
         do { try p.run() } catch { setup?.failed("Couldn't run setup: \(error.localizedDescription)") }
     }
 
-    /// Start the engine if asked, wait until it answers, open the browser, quit the launcher.
-    func finish(start: Bool) {
-        if start { launchEngine() }
-        var up = false
-        for _ in 0..<300 where !up {   // the first start loads a lot of Python; give it a minute
-            up = status() != nil
-            if !up { Thread.sleep(forTimeInterval: 0.2) }
+    // --- quitting stops the engine too (after asking, if it's recording or working)
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if quitting || !up { return .terminateNow }
+        guard let st = status() else { return .terminateNow }
+        let rec = st["recording"] as? [String: Any]
+        let tasks = (st["tasks"] as? [Any])?.count ?? 0
+        if rec != nil || tasks > 0 {
+            let a = NSAlert()
+            a.messageText = rec != nil ? "Folio is recording" : "Folio is still working"
+            a.informativeText = rec != nil
+                ? "Quitting stops and saves “\(rec?["title"] as? String ?? "the recording")”. It's transcribed next time you open Folio."
+                : "\(tasks) task\(tasks == 1 ? " is" : "s are") running or waiting. Transcriptions continue next time; fixes and summaries need starting again."
+            a.addButton(withTitle: "Quit")
+            a.addButton(withTitle: "Cancel")
+            if a.runModal() != .alertFirstButtonReturn { return .terminateCancel }
         }
-        DispatchQueue.main.async {
-            if !up {
-                let a = NSAlert()
-                a.messageText = "Folio didn't start"
-                a.informativeText = "See ~/Library/Logs/Folio.log for details."
-                a.runModal()
-            } else if !afterUpdate {
-                NSWorkspace.shared.open(URL(string: "http://127.0.0.1:\(port)/")!)
-            }
-            NSApp.terminate(nil)
+        quitting = true
+        main.showLoading("Quitting…")
+        DispatchQueue.global().async {
+            _ = engine("quit", post: "{\"force\": false}", timeout: 5)
+            for _ in 0..<125 where status() != nil { Thread.sleep(forTimeInterval: 0.2) }   // saving takes a moment
+            DispatchQueue.main.async { NSApp.reply(toApplicationShouldTerminate: true) }
         }
+        return .terminateLater
     }
 
-    func launchEngine() {
-        let p = Process()
-        p.executableURL = support.appendingPathComponent("venv/bin/python")
-        p.arguments = ["-m", "folio"]
-        var e = env
-        e["PYTHONPATH"] = res.appendingPathComponent("engine").path
-        e["PYTHONDONTWRITEBYTECODE"] = "1"
-        e["FOLIO_APP"] = bundle.bundlePath
-        e["FOLIO_VERSION"] = appVersion
-        e["FOLIO_SUPPORT"] = support.path
-        e["FOLIO_MODELS"] = support.appendingPathComponent("models").path
-        e["FOLIO_CAPTURE"] = bundle.bundleURL.appendingPathComponent("Contents/MacOS/folio-capture").path
-        e["FOLIO_PORT"] = port
-        p.environment = e
-        p.currentDirectoryURL = support
-        let logURL = logs.appendingPathComponent("Folio.log")
-        if !FileManager.default.fileExists(atPath: logURL.path) {
-            FileManager.default.createFile(atPath: logURL.path, contents: nil)
+    // --- menus
+
+    @objc func showSettings(_ sender: Any?) { if up { main.go("#/settings") } }
+    @objc func newRecording(_ sender: Any?) { if up { main.go("#/") } }
+    @objc func showActivity(_ sender: Any?) { if up { main.go("#/activity") } }
+    @objc func showMain(_ sender: Any?) { if up { main.showInterface() } }
+    @objc func openWebsite(_ sender: Any?) { NSWorkspace.shared.open(URL(string: "https://folio.qshlab.com")!) }
+
+    func buildMenu() {
+        let bar = NSMenu()
+        func menu(_ title: String, _ items: [NSMenuItem]) {
+            let top = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let m = NSMenu(title: title)
+            items.forEach(m.addItem)
+            top.submenu = m
+            bar.addItem(top)
         }
-        if let log = try? FileHandle(forWritingTo: logURL) {
-            log.seekToEndOfFile()
-            p.standardOutput = log
-            p.standardError = log
+        func item(_ title: String, _ action: Selector?, _ key: String = "", _ mods: NSEvent.ModifierFlags = .command,
+                  target: AnyObject? = nil) -> NSMenuItem {
+            let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            i.keyEquivalentModifierMask = mods
+            i.target = target
+            return i
         }
-        p.standardInput = FileHandle.nullDevice
-        try? p.run()
+        menu("Folio", [
+            item("About Folio", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+            .separator(),
+            item("Settings…", #selector(showSettings(_:)), ",", target: self),
+            .separator(),
+            item("Hide Folio", #selector(NSApplication.hide(_:)), "h"),
+            item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
+            item("Show All", #selector(NSApplication.unhideAllApplications(_:))),
+            .separator(),
+            item("Quit Folio", #selector(NSApplication.terminate(_:)), "q"),
+        ])
+        menu("File", [
+            item("New Recording", #selector(newRecording(_:)), "n", target: self),
+            .separator(),
+            item("Close Window", #selector(NSWindow.performClose(_:)), "w"),
+        ])
+        menu("Edit", [
+            item("Undo", Selector(("undo:")), "z"),
+            item("Redo", Selector(("redo:")), "z", [.command, .shift]),
+            .separator(),
+            item("Cut", #selector(NSText.cut(_:)), "x"),
+            item("Copy", #selector(NSText.copy(_:)), "c"),
+            item("Paste", #selector(NSText.paste(_:)), "v"),
+            item("Select All", #selector(NSText.selectAll(_:)), "a"),
+        ])
+        menu("View", [
+            item("Reload", #selector(MainWindow.reload(_:)), "r", target: main),
+            .separator(),
+            item("Actual Size", #selector(MainWindow.actualSize(_:)), "0", target: main),
+            item("Zoom In", #selector(MainWindow.zoomIn(_:)), "+", target: main),
+            item("Zoom Out", #selector(MainWindow.zoomOut(_:)), "-", target: main),
+            .separator(),
+            item("Activity", #selector(showActivity(_:)), "1", [.command, .option], target: self),
+            item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]),
+        ])
+        menu("Window", [
+            item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
+            item("Zoom", #selector(NSWindow.performZoom(_:))),
+            .separator(),
+            item("Folio", #selector(showMain(_:)), "1", target: self),
+        ])
+        NSApp.windowsMenu = bar.items.last?.submenu
+        menu("Help", [item("Folio Website", #selector(openWebsite(_:)), target: self)])
+        NSApp.mainMenu = bar
     }
 }
 
 let app = NSApplication.shared
 let delegate = App()
 app.delegate = delegate
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(.regular)
 app.run()
