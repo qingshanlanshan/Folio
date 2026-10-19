@@ -23,6 +23,14 @@ sh app/build.sh                    # optional: dist/Folio.app launcher
 .venv/bin/python -m folio          # http://127.0.0.1:8765
 ```
 
+**Mac app** (download at https://folio.qshlab.com): `sh app/build.sh` makes `dist/Folio-mac.dmg`, the
+update zip and `dist/mac.json`; `android/site/deploy.sh` publishes them. Bump `app/VERSION` first; set
+`NOTES="…"` for the update message. The app is tiny: on first launch it installs uv, Python 3.12, the
+packages in `app/requirements.lock` and the voice models into `~/Library/Application Support/Folio`
+(`app/setup.sh`), then runs the engine from its own copy of the code. It's signed with a self-made
+certificate in `app/signing/` (not in git; backed up). Updates are checked against it, and keeping
+it keeps the macOS permissions across updates.
+
 Models: speaker/VAD models go in `models/` (`pyannote-segmentation-3-0.onnx`, `silero_vad.onnx`,
 `nemo_en_titanet_small.onnx`, from the [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases)).
 Parakeet, Whisper and Qwen download from Hugging Face on first use (~2.5 + 1.6 + 4.6 GB).

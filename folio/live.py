@@ -18,9 +18,9 @@ import numpy as np
 
 from . import store
 from .audio import SR
-from .paths import MODELS, ROOT
+from .paths import CAPTURE, MODELS
 
-HELPER = ROOT / "bin" / "folio-capture"
+HELPER = CAPTURE
 TRACKS = {0: "mic", 1: "system"}
 PARTIAL_EVERY = 1.5
 MAX_PIECE = 20.0

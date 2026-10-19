@@ -139,6 +139,7 @@ function Sidebar({ projects, pid, route, reload }) {
         : html`<div class="plink addproj" onClick=${() => setAdding(true)}>+ New project</div>`}
     </div>
     <div class="sidefoot">
+      <${UpdateLink} />
       <a class=${"nav" + (route[0] === "settings" ? " on" : "")} href="#/settings"><${Icon} name="gear" />Settings</a>
       <${StatusBar} />
     </div>
@@ -166,15 +167,19 @@ addEventListener("pagehide", () => {
 });
 
 const statusListeners = new Set();
-let lastStatus = null, statusTimer = null, stopped = false;
+let lastStatus = null, statusTimer = null, stopped = false, seenVersion = null;
 async function pollStatus() {
   clearTimeout(statusTimer);
   if (stopped) return;
   try {
     lastStatus = await api(`/status?window=${WINDOW}`);
+    // Folio restarted as a new version (after an update): load the new pages.
+    const v = lastStatus.app?.version;
+    if (seenVersion && v && v !== seenVersion) return location.reload();
+    seenVersion = v;
     statusListeners.forEach((f) => f(lastStatus));
   } catch {}
-  const busy = lastStatus && (lastStatus.recording || lastStatus.tasks.length);
+  const busy = lastStatus && (lastStatus.recording || lastStatus.tasks.length || lastStatus.app?.installing);
   statusTimer = setTimeout(pollStatus, document.hidden ? 8000 : busy ? 1500 : 4000);
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden) pollStatus(); });
@@ -189,6 +194,21 @@ function useStatus() {
 }
 
 const gb = (x) => (x >= 0.1 ? `${x.toFixed(1)} GB` : `${Math.round(x * 1000)} MB`);
+
+async function installUpdate(version) {
+  if (!confirm(`Update Folio to ${version}? Folio restarts by itself; this takes a minute.`)) return;
+  try { await api("/update/install", { json: {} }); toast("Updating… Folio will restart"); }
+  catch (e) { toast(e.message); }
+  pollStatus();
+}
+
+function UpdateLink() {
+  const [st] = useStatus();
+  const a = st?.app;
+  if (!a || !(a.available || a.installing)) return null;
+  if (a.installing) return html`<div class="updlink">${a.step || "Updating"}…</div>`;
+  return html`<button class="updlink" onClick=${() => installUpdate(a.available.version)}>Update to ${a.available.version}</button>`;
+}
 
 function StatusBar() {
   const [st] = useStatus();
@@ -286,6 +306,30 @@ function Activity() {
   </div>`;
 }
 
+function UpdatesCard() {
+  const [st, poll] = useStatus();
+  const [checking, setChecking] = useState(false);
+  const a = st?.app;
+  if (!a) return null;
+  const check = async () => {
+    setChecking(true);
+    try { await api("/update/check", { json: {} }); } catch (e) { toast(e.message); }
+    setChecking(false); poll();
+  };
+  return html`<h3>Updates</h3>
+    <div class="card">
+      <div class="row"><b>Folio ${a.version}</b><span class="spacer"></span>
+        ${!a.updatable ? html`<span class="m">Running from source: update with git pull</span>`
+          : a.installing ? html`<span class="m">${a.step || "Updating"}…</span>`
+          : a.available ? html`<button class="btn primary" onClick=${() => installUpdate(a.available.version)}>Update to ${a.available.version}</button>`
+          : html`<button class="btn" disabled=${checking} onClick=${check}>${checking ? "Checking…" : "Check for updates"}</button>`}</div>
+      ${a.available?.notes ? html`<div class="hint">What's new: ${a.available.notes}</div>` : null}
+      ${a.updatable && !a.available && a.checked && !a.error ? html`<div class="hint">You have the latest version.</div>` : null}
+      ${a.error ? html`<div class="hint errtext">${a.error}</div>` : null}
+      ${a.updatable ? html`<div class="hint">Folio checks for updates twice a day and asks before installing.</div>` : null}
+    </div>`;
+}
+
 function Settings() {
   const [s, setS] = useState(null);
   const [key, setKey] = useState("");
@@ -340,6 +384,8 @@ function Settings() {
         <span class="m">${month.requests} request${month.requests === 1 ? "" : "s"} · about $${(month.usd || 0).toFixed(2)}</span></div>
       <div class="hint">Estimated from token counts at list prices; your Anthropic console has the exact bill.</div>
     </div>
+
+    <${UpdatesCard} />
 
     <h3>Notifications</h3>
     <div class="card">

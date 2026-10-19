@@ -17,3 +17,5 @@ site/.wrangler/
 site/.npm-cache/
 site/Folio-speedtest.apk
 site/Folio-*.apk
+site/public/Folio-mac*
+site/public/mac.json

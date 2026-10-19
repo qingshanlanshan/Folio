@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import claude, correct, jobs, live, people, runtime, search, store, summarize, transcript
+from . import claude, correct, jobs, live, people, runtime, search, store, summarize, transcript, updates
 
 jobs.AFTER.append(people.match)
 jobs.HANDLERS["correct"] = correct.run
@@ -37,6 +37,7 @@ def _start():
     store.ensure_unsorted()
     jobs.start()
     runtime.start()
+    updates.start()
 
 
 # --- projects
@@ -559,7 +560,7 @@ def app_status(window: str = ""):
         st = s.state(len(s.events))
         rec = {k: st[k] for k in ("pid", "mid", "title", "elapsed", "tracks", "stopping")}
     return {"recording": rec, "tasks": tasks, "models": runtime.models(), "memory": runtime.memory(),
-            "settings": runtime.settings(), "windows": runtime.windows_open()}
+            "settings": runtime.settings(), "windows": runtime.windows_open(), "app": updates.info()}
 
 
 class WindowIn(BaseModel):
@@ -651,6 +652,20 @@ def test_claude():
 
 class QuitIn(BaseModel):
     force: bool = False
+
+
+@app.post("/api/update/check")
+def update_check():
+    return updates.check()
+
+
+@app.post("/api/update/install")
+def update_install():
+    try:
+        updates.install()
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return updates.info()
 
 
 @app.post("/api/quit")

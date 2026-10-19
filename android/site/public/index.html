@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Folio for Android</title>
+  <title>Folio · meeting and lecture recorder</title>
   <meta name="robots" content="noindex">
   <link rel="icon" href="icon.svg">
   <style>
@@ -15,7 +15,9 @@
     .brand img { width: 52px; height: 52px; }
     h1 { font: 600 30px/1.2 Georgia, serif; margin: 0; }
     p { color: var(--muted); }
-    .btn { display: inline-block; margin: 18px 0 6px; padding: 13px 22px; border-radius: 10px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+    .btn { display: inline-block; margin: 14px 0 6px; padding: 13px 22px; border-radius: 10px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+    h2 { font: 600 21px/1.3 Georgia, serif; margin: 36px 0 0; }
+    code { font-size: 13px; background: var(--line); padding: 1px 5px; border-radius: 4px; }
     .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 4px 18px; margin-top: 22px; }
     li { margin: 6px 0; }
     small { color: var(--muted); }
@@ -24,7 +26,23 @@
 <body>
 <main>
   <div class="brand"><img src="icon.svg" alt=""><h1>Folio</h1></div>
-  <p>Record meetings and lectures, organised by project. Speech recognition runs on the phone; summaries, fixes and questions use Claude with your own API key.</p>
+  <p>Record meetings and lectures, organised by project, with live transcripts, speakers told apart, and summaries that know the project.</p>
+
+  <h2>Mac</h2>
+  <p>Everything runs on your Mac: transcription, speakers, and summaries with a local model, or Claude with your own API key.</p>
+  <a class="btn" href="/mac">Download for Mac</a>
+  <div><small id="macver">Apple Silicon (M1 or newer) · macOS 14.4 or newer</small></div>
+  <div class="card">
+    <ul>
+      <li>Open the downloaded file and drag Folio into Applications.</li>
+      <li>The first time you open it, macOS says it can't check the developer. Click Done, then go to System Settings → Privacy &amp; Security and click <b>Open Anyway</b>. This is needed only once.</li>
+      <li>On first start, Folio installs its speech engine (about 1.5 GB). Speech models download when first used.</li>
+      <li>Updates: Folio checks for new versions and offers them in the app (Settings → Updates).</li>
+    </ul>
+  </div>
+
+  <h2>Android</h2>
+  <p>Speech recognition runs on the phone; summaries, fixes and questions use Claude with your own API key.</p>
   <a class="btn" href="/download" id="dl">Download for Android</a>
   <div><small id="ver">Android 10 or newer · 64-bit phones</small></div>
   <div class="card">
@@ -38,6 +56,9 @@
 <script>
   fetch("version.json", { cache: "no-store" }).then((r) => r.json()).then((v) => {
     document.getElementById("ver").textContent = `Version ${v.version} · ${(v.size / 1048576).toFixed(1)} MB · Android 10 or newer`;
+  }).catch(() => {});
+  fetch("mac.json", { cache: "no-store" }).then((r) => r.json()).then((v) => {
+    document.getElementById("macver").textContent = `Version ${v.version} · Apple Silicon · macOS 14.4 or newer`;
   }).catch(() => {});
 </script>
 </body>
