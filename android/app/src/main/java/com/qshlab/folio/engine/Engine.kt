@@ -106,6 +106,21 @@ class Engine(private val ctx: Context, val store: Store, val models: ModelStore)
         }
     }
 
+    // --- filing
+
+    /** Files a recording in another project, with its voice prints and to-dos; summarized again there. */
+    fun move(pid: String, mid: String, to: String): String {
+        if (pid == to) return mid
+        store.projectDir(to)
+        if (_tasks.value.any { it.key == "$pid/$mid" }) throw IllegalStateException("This recording is being processed. Move it when that finishes.")
+        val newMid = store.moveMeeting(pid, mid, to)
+        people.retarget(pid, mid, to, newMid)
+        summaries.moveTodos(pid, mid, to, newMid)
+        if (to != com.qshlab.folio.data.UNSORTED && claude.key != null && store.transcript(to, newMid) != null) submit(to, newMid, "summarize")
+        com.qshlab.folio.data.Changes.bump()
+        return newMid
+    }
+
     // --- queue
 
     fun submit(pid: String, mid: String, kind: String, opts: Map<String, String> = emptyMap()) {

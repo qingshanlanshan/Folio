@@ -147,7 +147,7 @@ fun ProjectScreen(nav: NavHostController, pid: String) {
 }
 
 @Composable
-private fun Capture(pid: String) {
+fun Capture(pid: String) {
     val app = FolioApp.instance
     val ctx = LocalContext.current
     val rec by app.recorder.state.collectAsState()

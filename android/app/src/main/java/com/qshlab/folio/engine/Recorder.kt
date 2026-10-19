@@ -27,6 +27,7 @@ data class LiveState(
     val elapsed: Double = 0.0, val levels: Map<String, Float> = emptyMap(),
     val events: List<LiveEvent> = emptyList(), val partials: Map<String, String> = emptyMap(),
     val stopping: Boolean = false, val error: String? = null,
+    val target: String = pid,             // the project it's saved to when it stops (can change while recording)
 )
 
 /**
@@ -42,6 +43,9 @@ class Recorder(private val engine: Engine) {
     private var seq = 0
 
     val active get() = _state.value?.let { !it.stopping } == true
+
+    /** Save the recording in another project once it stops. */
+    fun saveTo(project: String) { _state.update { it?.copy(target = project) } }
 
     @SuppressLint("MissingPermission")   // checked by the UI before starting
     fun start(pid: String, title: String, mic: Boolean, projection: MediaProjection?) {
@@ -122,10 +126,13 @@ class Recorder(private val engine: Engine) {
             threads.forEach { it.join(5000) }
             threads.clear()
             val dur = s.tracks.maxOfOrNull { File(engine.store.meetingDir(s.pid, s.mid), "$it.pcm").length() / 2.0 / SR } ?: 0.0
+            val target = _state.value?.target ?: s.pid
             if (dur < 1) engine.store.updateMeeting(s.pid, s.mid) { it.copy(status = "error", error = _state.value?.error ?: "Nothing was recorded.", duration = dur) }
             else {
                 engine.store.updateMeeting(s.pid, s.mid) { it.copy(status = "queued", duration = dur) }
-                engine.submit(s.pid, s.mid, "process")
+                val (pid, mid) = if (target != s.pid) runCatching { target to engine.store.moveMeeting(s.pid, s.mid, target) }.getOrDefault(s.pid to s.mid)
+                    else s.pid to s.mid
+                engine.submit(pid, mid, "process")
             }
             _state.value = null
             com.qshlab.folio.data.Changes.bump()

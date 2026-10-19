@@ -17,6 +17,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -27,7 +29,10 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -52,13 +57,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.qshlab.folio.FolioApp
 import com.qshlab.folio.MainActivity
+import com.qshlab.folio.data.UNSORTED
 import com.qshlab.folio.speech.MODELS
 import com.qshlab.folio.update.Updates
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -85,9 +94,14 @@ fun FolioNav(activity: MainActivity) {
         }
     }
 
-    Scaffold(snackbarHost = { SnackbarHost(snack) }) { pad ->
-        NavHost(nav, "home", Modifier.padding(PaddingValues(bottom = pad.calculateBottomPadding()))) {
-            composable("home") { Home(nav, activity) }
+    val entry by nav.currentBackStackEntryAsState()
+    val route = entry?.destination?.route
+    val shared by activity.shared
+    Scaffold(snackbarHost = { SnackbarHost(snack) },
+        bottomBar = { if (route in TABS.map { it.route }) BottomBar(nav, route) }) { pad ->
+        NavHost(nav, "record", Modifier.padding(PaddingValues(bottom = pad.calculateBottomPadding()))) {
+            composable("record") { RecordScreen(nav) }
+            composable("home") { Home(nav) }
             composable("project/{pid}") { ProjectScreen(nav, it.arguments!!.getString("pid")!!) }
             composable("meeting/{pid}/{mid}?t={t}", listOf(navArgument("t") { nullable = true; defaultValue = null })) {
                 MeetingScreen(nav, it.arguments!!.getString("pid")!!, it.arguments!!.getString("mid")!! + "?t=" + (it.arguments?.getString("t") ?: "-1"))
@@ -99,6 +113,57 @@ fun FolioNav(activity: MainActivity) {
             composable("activity") { ActivityScreen(nav) }
             composable("speedtest") { Screen(nav, "Speed & battery test") { SpeedTestScreen() } }
         }
+    }
+    // A file shared into Folio from another app: ask which project it goes to.
+    shared?.let { uri ->
+        val app = FolioApp.instance
+        val projects = remember { app.store.listProjects() }
+        AlertDialog(onDismissRequest = { activity.shared.value = null }, title = { Text("Import into which project?") },
+            text = {
+                Column { for (p in projects) Text(p.meta.name, Modifier.fillMaxWidth().clickable {
+                    importInto(app, p.id, uri); activity.shared.value = null; nav.navigate("project/${enc(p.id)}")
+                }.padding(vertical = 12.dp)) }
+            },
+            confirmButton = { TextButton({ activity.shared.value = null }) { Text("Cancel") } })
+    }
+}
+
+private data class Tab(val route: String, val label: String, val icon: ImageVector)
+private val TABS = listOf(Tab("record", "Record", Icons.Default.FiberManualRecord), Tab("home", "Projects", Icons.Default.Folder),
+    Tab("people", "People", Icons.Default.People))
+
+/** Record · Projects · People, with what Folio is doing just above. */
+@Composable
+private fun BottomBar(nav: NavHostController, route: String?) {
+    Column {
+        StatusBar(nav, Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+        NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+            for (t in TABS) NavigationBarItem(selected = route == t.route, label = { Text(t.label) },
+                icon = { Icon(t.icon, null, tint = if (t.route == "record") RecRed else LocalContentColor.current) },
+                onClick = {
+                    if (route != t.route) nav.navigate(t.route) {
+                        popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                })
+        }
+    }
+}
+
+/** A top-level screen (one of the tabs): title, search and settings, no back arrow. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TabScreen(nav: NavHostController, title: String, actions: @Composable () -> Unit = {}, content: @Composable () -> Unit) {
+    Column(Modifier.fillMaxSize()) {
+        TopAppBar(title = { Text(title, fontFamily = Heading, fontWeight = FontWeight.SemiBold) },
+            actions = {
+                actions()
+                IconButton({ nav.navigate("search?q=&person=") }) { Icon(Icons.Default.Search, "Search") }
+                IconButton({ nav.navigate("settings") }) { Icon(Icons.Default.Settings, "Settings") }
+            },
+            colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background))
+        content()
     }
 }
 
@@ -115,69 +180,53 @@ fun Screen(nav: NavHostController, title: String, actions: @Composable () -> Uni
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Home(nav: NavHostController, activity: MainActivity) {
+fun Home(nav: NavHostController) {
     val app = FolioApp.instance
     val version by dataVersion.collectAsState()
     val tasks by app.engine.tasks.collectAsState()
-    val installed by app.models.installed.collectAsState()
     val projects = remember(version, tasks.size) { app.store.listProjects() }
     var adding by remember { mutableStateOf(false) }
-    val shared by activity.shared
     val update by Updates.available.collectAsState()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(title = { Text("Folio", fontFamily = Heading, fontWeight = FontWeight.SemiBold) },
-                actions = {
-                    IconButton({ nav.navigate("search?q=&person=") }) { Icon(Icons.Default.Search, "Search") }
-                    IconButton({ nav.navigate("people") }) { Icon(Icons.Default.People, "People") }
-                    IconButton({ nav.navigate("settings") }) { Icon(Icons.Default.Settings, "Settings") }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background))
-        },
-        floatingActionButton = { ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text("New project") }) },
-        bottomBar = { StatusBar(nav, Modifier.navigationBarsPadding().padding(12.dp)) },
-    ) { pad ->
-        LazyColumn(Modifier.padding(pad).fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (MODELS.filter { it.required }.any { it.id !in installed }) item {
-                Card(Modifier.fillMaxWidth().clickable { nav.navigate("settings") }, colors = CardDefaults.cardColors(MaterialTheme.colorScheme.primaryContainer)) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text("Set up speech recognition", fontWeight = FontWeight.SemiBold)
-                        Hint("Folio transcribes on this phone. Download the speech models once (about 780 MB, use Wi-Fi) in Settings.")
-                    }
-                }
-            }
+    TabScreen(nav, "Projects", actions = { TextButton({ adding = true }) { Text("New") } }) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            item { SetupCard(nav) }
             update?.let { u -> item {
                 Card(Modifier.fillMaxWidth().clickable { nav.navigate("settings") }) {
                     Column(Modifier.padding(14.dp)) { Text("Folio ${u.version} is available", fontWeight = FontWeight.SemiBold); Hint("Open Settings to update.") }
                 }
             } }
-            if (projects.isEmpty()) item {
-                Hint("Create a project — a research group, a course, a client — then record or import meetings into it.", Modifier.padding(24.dp))
-            }
             items(projects, key = { it.id }) { p ->
+                val inbox = p.id == UNSORTED
                 Card(Modifier.fillMaxWidth().clickable { nav.navigate("project/${enc(p.id)}") }, colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer)) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(p.meta.name, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
+                        Text(p.meta.name, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
+                            color = if (inbox) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
                         Hint("${p.meetings} recording${if (p.meetings == 1) "" else "s"}")
                     }
                 }
+            }
+            if (projects.size <= 1) item {
+                Hint("Create a project — a research group, a course, a client — and file recordings in it. Recordings you don't file go to Unsorted.", Modifier.padding(24.dp))
             }
         }
     }
     if (adding) NameDialog("New project", "Project or course name", "", { adding = false }) { name ->
         val id = app.store.createProject(name); changed(); adding = false; nav.navigate("project/${enc(id)}")
     }
-    shared?.let { uri ->
-        AlertDialog(onDismissRequest = { activity.shared.value = null }, title = { Text("Import into which project?") },
-            text = {
-                Column { for (p in projects) Text(p.meta.name, Modifier.fillMaxWidth().clickable {
-                    importInto(app, p.id, uri); activity.shared.value = null; nav.navigate("project/${enc(p.id)}")
-                }.padding(vertical = 12.dp)) }
-            },
-            confirmButton = { TextButton({ activity.shared.value = null }) { Text("Cancel") } })
+}
+
+/** Shown until the speech models are downloaded. */
+@Composable
+fun SetupCard(nav: NavHostController) {
+    val installed by FolioApp.instance.models.installed.collectAsState()
+    if (MODELS.filter { it.required }.all { it.id in installed }) return
+    Card(Modifier.fillMaxWidth().clickable { nav.navigate("settings") }, colors = CardDefaults.cardColors(MaterialTheme.colorScheme.primaryContainer)) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Set up speech recognition", fontWeight = FontWeight.SemiBold)
+            Hint("Folio transcribes on this phone. Download the speech models once (about 780 MB, use Wi-Fi) in Settings.")
+        }
     }
 }
 

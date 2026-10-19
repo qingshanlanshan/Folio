@@ -38,6 +38,7 @@ from .s3 import S3, S3Error
 
 CONFIG = store.HOME / "sync.json"
 STATE = store.HOME / ".sync" / "state.json"
+DEVICE = store.HOME / ".sync" / "device"     # kept when sync is turned off, so rejoining isn't a new device
 CHUNK = 8 << 20
 INTERVAL = 120
 
@@ -109,6 +110,18 @@ def _marker(c: dict) -> dict | None:
     return json.loads(raw) if raw else None
 
 
+def _device_id() -> str:
+    try:
+        d = DEVICE.read_text().strip()
+    except OSError:
+        d = ""
+    if not re.fullmatch(r"[0-9a-f]{12}", d):
+        d = secrets.token_hex(6)
+        DEVICE.parent.mkdir(parents=True, exist_ok=True)
+        DEVICE.write_text(d)
+    return d
+
+
 def _device_name() -> str:
     try:
         name = subprocess.run(["scutil", "--get", "ComputerName"], capture_output=True, text=True, timeout=5).stdout.strip()
@@ -120,7 +133,7 @@ def _device_name() -> str:
 def connect(account: str, bucket: str, key_id: str, secret: str) -> dict:
     """First device: check the bucket and start a new sync key."""
     c = {"endpoint": _endpoint(account), "bucket": bucket.strip(), "keyId": key_id.strip(), "secret": secret.strip(),
-         "key": base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(), "device": secrets.token_hex(6),
+         "key": base64.urlsafe_b64encode(secrets.token_bytes(32)).decode(), "device": _device_id(),
          "name": _device_name()}
     if not all(c.values()):
         raise SyncError("Fill in all four fields.")
@@ -150,7 +163,7 @@ def join(text: str) -> dict:
         c = {k: p[k] for k in ("endpoint", "bucket", "keyId", "secret", "key")}
     except (ValueError, KeyError):
         raise SyncError("The code is incomplete. Copy all of it.")
-    c.update(device=secrets.token_hex(6), name=_device_name())
+    c.update(device=_device_id(), name=_device_name())
     m = _marker(c)
     if not m:
         raise SyncError("The bucket in this code is empty. Set up sync on the other device first.")
@@ -320,7 +333,9 @@ def run_once() -> dict:
 def _round(c: dict) -> tuple[int, int]:
     s3, me = _client(c), c["device"]
     st = store.read_json(STATE, default={})
-    st.setdefault("seq", 0); st.setdefault("clock", 0); st.setdefault("cursors", {})
+    if "seq" not in st:      # after rejoining: carry on after this device's earlier batches
+        st["seq"] = max((int(k.rsplit("/", 1)[1]) for k in s3.list(f"l/{me}/")[0]), default=0)
+    st.setdefault("clock", 0); st.setdefault("cursors", {})
     st.setdefault("files", {}); st.setdefault("known", {}); st.setdefault("pieces", [])
     files, known, pieces = st["files"], st["known"], set(st["pieces"])
 
@@ -427,6 +442,9 @@ def _round(c: dict) -> tuple[int, int]:
             raw = s3.get(key)
             if raw:
                 info = json.loads(_open(c, raw, key))
+                if key != f"d/{me}" and info.get("name") == c["name"] and info.get("platform") == "mac":
+                    s3.delete(key)            # this Mac from before it rejoined (older versions got a new id)
+                    continue
                 devices.append({**info, "me": key == f"d/{me}"})
         st["devices"] = sorted(devices, key=lambda d: (not d["me"], d["name"]))
     save()

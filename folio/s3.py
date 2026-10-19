@@ -72,6 +72,9 @@ class S3:
         status, body = self.request("GET", key, timeout=300)
         return None if status == 404 else body
 
+    def delete(self, key: str) -> None:
+        self.request("DELETE", key)
+
     def exists(self, key: str) -> bool:
         return self.request("HEAD", key)[0] != 404
 

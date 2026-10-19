@@ -53,7 +53,7 @@ data class DeviceInfo(val name: String, val platform: String, val seen: Double, 
 
 @Serializable
 data class SyncState(
-    var seq: Long = 0, var clock: Long = 0,
+    var seq: Long = -1, var clock: Long = 0,        // seq -1: not known yet (fresh start or rejoined)
     val cursors: MutableMap<String, String> = mutableMapOf(),
     val files: MutableMap<String, LocalFile> = mutableMapOf(),
     val known: MutableMap<String, Change> = mutableMapOf(),
@@ -97,6 +97,8 @@ object Sync {
     fun start(context: Context) {
         ctx = context.applicationContext
         _config.value = prefs.getString("config", null)?.let { runCatching { json.decodeFromString<SyncConfig>(it) }.getOrNull() }
+        // phones that joined before the id was kept: remember the current one
+        _config.value?.let { c -> if (prefs.getString("device", null) == null) prefs.edit().putString("device", c.device).apply() }
         scope.launch {
             while (true) {
                 if (_config.value != null) runOnce()
@@ -124,6 +126,10 @@ object Sync {
     private fun check(c: SyncConfig) = hex(hmac(macKey(c), "folio-sync".toByteArray())).take(16)
     private fun client(c: SyncConfig) = S3(c.endpoint, c.bucket, c.keyId, c.secret)
     private fun randomHex(n: Int) = hex(ByteArray(n).also { SecureRandom().nextBytes(it) })
+
+    /** Kept when sync is turned off, so rejoining isn't a new device. */
+    private fun deviceId(): String = prefs.getString("device", null)?.takeIf { Regex("[0-9a-f]{12}").matches(it) }
+        ?: randomHex(6).also { prefs.edit().putString("device", it).apply() }
     private fun deviceName() = listOf(Build.MANUFACTURER.replaceFirstChar { it.uppercase() }, Build.MODEL)
         .distinct().joinToString(" ").let { if (Build.MODEL.startsWith(Build.MANUFACTURER, ignoreCase = true)) Build.MODEL else it }
 
@@ -149,7 +155,7 @@ object Sync {
     /** First device: check the bucket and start a new sync key. Call off the main thread. */
     fun connect(account: String, bucket: String, keyId: String, secret: String) {
         val c = SyncConfig(endpoint(account), bucket.trim(), keyId.trim(), secret.trim(),
-            Base64.getUrlEncoder().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) }), randomHex(6), deviceName())
+            Base64.getUrlEncoder().encodeToString(ByteArray(32).also { SecureRandom().nextBytes(it) }), deviceId(), deviceName())
         if (listOf(c.bucket, c.keyId, c.secret).any { it.isEmpty() }) throw SyncError("Fill in all four fields.")
         if (marker(c) != null) throw SyncError("This bucket already holds Folio data. On the device that set it up, open Settings → Sync → “Code for another device”, and join with that code instead.")
         client(c).put("folio-sync.json", json.encodeToString(Marker(1, check(c))).toByteArray())
@@ -168,7 +174,7 @@ object Sync {
         if (!t.startsWith("folio1:")) throw SyncError("That isn't a Folio sync code. It starts with “folio1:”.")
         val p = runCatching { json.decodeFromString<CodePayload>(String(Base64.getUrlDecoder().decode(t.substring(7)))) }
             .getOrElse { throw SyncError("The code is incomplete. Copy all of it.") }
-        val c = SyncConfig(p.endpoint, p.bucket, p.keyId, p.secret, p.key, randomHex(6), deviceName())
+        val c = SyncConfig(p.endpoint, p.bucket, p.keyId, p.secret, p.key, deviceId(), deviceName())
         val m = marker(c) ?: throw SyncError("The bucket in this code is empty. Set up sync on the other device first.")
         if (m.check != check(c)) throw SyncError("This code doesn't match the data in the bucket. Get a fresh code from the other device.")
         begin(c)
@@ -271,6 +277,8 @@ object Sync {
         val s3 = client(c); val me = c.device
         val st = stateFile.readJson<SyncState>() ?: SyncState()
         fun save() = stateFile.writeJson(st)
+        if (st.seq < 0)     // after rejoining: carry on after this device's earlier batches
+            st.seq = s3.list("l/$me/").first.maxOfOrNull { it.substringAfterLast('/').toLong() } ?: 0
 
         // 1. local changes (files are read and sent in 8 MiB pieces, so long recordings fit in memory)
         val (local, skip) = scan()
@@ -370,7 +378,9 @@ object Sync {
         if (now - st.listed > 3600 || received > 0) {
             st.listed = now
             st.devices = s3.list("d/").first.mapNotNull { key ->
-                s3.get(key)?.let { json.decodeFromString<DeviceInfo>(String(open(c, it, key))).copy(me = key == "d/$me") }
+                val d = s3.get(key)?.let { json.decodeFromString<DeviceInfo>(String(open(c, it, key))).copy(me = key == "d/$me") } ?: return@mapNotNull null
+                // this phone from before it rejoined (older versions got a new id each time)
+                if (!d.me && d.name == c.name && d.platform == "android") { s3.delete(key); null } else d
             }.sortedWith(compareBy({ !it.me }, { it.name }))
         }
         save()

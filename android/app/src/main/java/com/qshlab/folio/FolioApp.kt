@@ -22,6 +22,7 @@ class FolioApp : Application() {
         instance = this
         FolioAppRef.ctx = this
         store = Store(File(filesDir, "Folio"))
+        store.ensureUnsorted()
         models = ModelStore(File(filesDir, "models"))
         engine = Engine(this, store, models)
         recorder = Recorder(engine)

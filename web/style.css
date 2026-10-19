@@ -52,6 +52,7 @@ a { color: inherit; text-decoration: none; }
 .sidelist { flex: 1; min-height: 0; overflow-y: auto; padding-top: 6px; margin: 0 -4px; padding-left: 4px; padding-right: 4px; }
 .sidelist .plink { padding-left: 10px; }
 .addproj { color: var(--muted); }
+.plink.unsorted:not(.on) span { color: var(--muted); }
 .updlink { display: block; width: 100%; text-align: left; font: inherit; font-size: 13px; font-weight: 600; padding: 7px 10px; border-radius: 7px;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--line)); background: var(--accent-soft); color: var(--accent); cursor: pointer; }
 button.updlink:hover { border-color: var(--accent); }

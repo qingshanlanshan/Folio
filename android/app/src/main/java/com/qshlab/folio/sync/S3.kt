@@ -77,6 +77,7 @@ class S3(endpoint: String, private val bucket: String, private val keyId: String
     }
 
     fun put(key: String, body: ByteArray) { request("PUT", key, body = body) }
+    fun delete(key: String) { request("DELETE", key) }
     fun get(key: String): ByteArray? = request("GET", key).let { (code, data) -> if (code == 404) null else data }
 
     /** → (keys, common prefixes), all pages. */

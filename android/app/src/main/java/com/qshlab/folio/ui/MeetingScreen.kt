@@ -3,6 +3,8 @@ package com.qshlab.folio.ui
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -101,7 +103,8 @@ fun MeetingScreen(nav: NavHostController, pid: String, midAndT: String) {
     LaunchedEffect(task != null) { while (task != null) { delay(1500); tick++ } }
     var v by remember { mutableIntStateOf(0) }
     val meta = remember(version, tasks, tick, v) { runCatching { store.meeting(pid, mid) }.getOrNull() }
-    if (meta == null) { LaunchedEffect(Unit) { nav.popBackStack() }; return }
+    // Gone (deleted, or moved by sync): leave, unless another screen is already in front of this one.
+    if (meta == null) { LaunchedEffect(Unit) { nav.currentBackStackEntry?.arguments?.let { a -> if (a.getString("pid") == pid && a.getString("mid") == mid) nav.popBackStack() } }; return }
     val t = remember(version, tasks, tick, v) { store.transcript(pid, mid)?.let(engine.people::resolve) }
     val summary = remember(version, tasks, tick, v) { engine.summaries.summary(pid, mid) }
     val fixes = remember(version, tasks, tick, v) { engine.fixes.load(pid, mid).items.filter { it.status == "pending" } }
@@ -112,6 +115,7 @@ fun MeetingScreen(nav: NavHostController, pid: String, midAndT: String) {
     var who by remember { mutableStateOf<Pair<Int, Paragraph?>?>(null) }
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
+    var moving by remember { mutableStateOf(false) }
     val list = rememberLazyListState()
 
     // --- player
@@ -160,6 +164,7 @@ fun MeetingScreen(nav: NavHostController, pid: String, midAndT: String) {
                 HorizontalDivider()
             }
             DropdownMenuItem({ Text("Rename") }, { menu = false; renaming = true })
+            DropdownMenuItem({ Text("Move to project…") }, { menu = false; moving = true }, enabled = task == null && meta.status != "recording")
             DropdownMenuItem({ Text("Transcribe again") }, { menu = false; engine.submit(pid, mid, "process") }, enabled = !busy && meta.status != "recording")
             DropdownMenuItem({ Text("Delete…") }, { menu = false; deleting = true })
         }
@@ -248,7 +253,26 @@ fun MeetingScreen(nav: NavHostController, pid: String, midAndT: String) {
             dismissButton = { TextButton({ editing = null }) { Text("Cancel") } })
     }
     who?.let { (spk, para) -> SpeakerSheet(pid, mid, t!!, spk, para, { who = null }) { v++ } }
-    if (renaming) NameDialog("Rename", "Title", meta.title, { renaming = false }) { n -> store.updateMeeting(pid, mid) { it.copy(title = n) }; renaming = false; v++; changed() }
+    if (renaming) NameDialog("Rename", "Title", meta.title, { renaming = false }) { n -> store.updateMeeting(pid, mid) { it.copy(title = n, titleSource = "user") }; renaming = false; v++; changed() }
+    if (moving) {
+        val projects = remember { store.listProjects().filter { it.id != pid } }
+        AlertDialog(onDismissRequest = { moving = false }, title = { Text("Move to project") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    for (p in projects) Text(p.meta.name, Modifier.fillMaxWidth().clickable {
+                        moving = false
+                        runCatching { engine.move(pid, mid, p.id) }
+                            .onSuccess { nm ->
+                                val here = nav.currentBackStackEntry?.destination?.id
+                                nav.navigate("meeting/${enc(p.id)}/${enc(nm)}") { if (here != null) popUpTo(here) { inclusive = true } }
+                            }
+                            .onFailure { app.lastError.value = it.message }
+                    }.padding(vertical = 12.dp))
+                    if (projects.isEmpty()) Hint("Create a project first.")
+                }
+            },
+            confirmButton = { TextButton({ moving = false }) { Text("Cancel") } })
+    }
     if (deleting) AlertDialog(onDismissRequest = { deleting = false }, title = { Text("Delete “${meta.title}”?") },
         text = { Text("The recording and its transcript are moved to Folio's trash.") },
         confirmButton = { TextButton({ task?.let { engine.stop(it.key) }; store.moveToTrash(store.meetingDir(pid, mid)); deleting = false; changed(); nav.popBackStack() }) { Text("Delete") } },

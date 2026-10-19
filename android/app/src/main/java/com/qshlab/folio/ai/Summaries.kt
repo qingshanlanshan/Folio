@@ -70,6 +70,14 @@ class Summaries(private val store: Store, private val people: People, private va
     fun transcriptText(t: Transcript) = t.paragraphs().joinToString("\n") { "[${clock(it.start)}] ${t.speakerName(it.speaker)}: ${t.text(it)}" }
 
     fun todos(pid: String): List<Todo> = File(store.projectDir(pid), "todos.json").readJson<Todos>()?.items ?: emptyList()
+    /** A recording moved to another project takes the to-dos it created along. */
+    fun moveTodos(pid: String, mid: String, to: String, newMid: String) {
+        val mine = todos(pid).filter { it.from?.meeting == mid }
+        if (mine.isEmpty()) return
+        saveTodos(pid, todos(pid) - mine.toSet())
+        saveTodos(to, todos(to) + mine.map { it.copy(from = TodoFrom(newMid)) })
+    }
+
     fun saveTodos(pid: String, items: List<Todo>) = File(store.projectDir(pid), "todos.json").writeJson(Todos(items))
 
     fun state(pid: String): String = File(store.projectDir(pid), "state.md").let { if (it.exists()) it.readText() else "" }
@@ -186,8 +194,10 @@ Reply with JSON only."""
             at = now(), writer = claude.model.name, updatedState = latest,
         )
         File(store.meetingDir(pid, mid), "summary.json").writeJson(s)
-        applyTodos(pid, mid, s)
-        if (latest) updateState(pid, store.meeting(pid, mid).title, s, check)
+        if (pid != com.qshlab.folio.data.UNSORTED) {     // Unsorted has no project state or to-dos
+            applyTodos(pid, mid, s)
+            if (latest) updateState(pid, store.meeting(pid, mid).title, s, check)
+        }
         progress(1f)
         return s
     }

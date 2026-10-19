@@ -69,7 +69,7 @@ fun PeopleScreen(nav: NavHostController) {
     val version by dataVersion.collectAsState()
     val people = remember(version) { app.engine.people.all() }
     var adding by remember { mutableStateOf(false) }
-    Screen(nav, "People", actions = { TextButton({ adding = true }) { Text("Add") } }) {
+    TabScreen(nav, "People", actions = { TextButton({ adding = true }) { Text("Add") } }) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item { Hint("Shared across projects. Name a speaker in any recording to add them; their voice is recognised next time.") }
             items(people, key = { it.id }) { p ->
@@ -191,7 +191,8 @@ fun SettingsScreen(nav: NavHostController) {
     var checking by remember { mutableStateOf(false) }
     var updating by remember { mutableStateOf<Float?>(null) }
     val prefs = ctx.getSharedPreferences("settings", 0)
-    val month = remember(v) { claude.thisMonth() }
+    val synced by dataVersion.collectAsState()      // sync may bring the API key from another device
+    val month = remember(v, synced) { claude.thisMonth() }
 
     Screen(nav, "Settings") {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
