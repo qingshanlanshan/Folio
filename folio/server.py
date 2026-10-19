@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import claude, correct, jobs, live, people, runtime, search, store, summarize, transcript, updates
+from . import claude, correct, jobs, live, people, runtime, search, store, summarize, sync, transcript, updates
 
 jobs.AFTER.append(people.match)
 jobs.HANDLERS["correct"] = correct.run
@@ -38,6 +38,7 @@ def _start():
     jobs.start()
     runtime.start()
     updates.start()
+    sync.start()
 
 
 # --- projects
@@ -560,7 +561,8 @@ def app_status(window: str = ""):
         st = s.state(len(s.events))
         rec = {k: st[k] for k in ("pid", "mid", "title", "elapsed", "tracks", "stopping")}
     return {"recording": rec, "tasks": tasks, "models": runtime.models(), "memory": runtime.memory(),
-            "settings": runtime.settings(), "windows": runtime.windows_open(), "app": updates.info()}
+            "settings": runtime.settings(), "windows": runtime.windows_open(), "app": updates.info(),
+            "syncRev": sync._status["rev"]}
 
 
 class WindowIn(BaseModel):
@@ -652,6 +654,58 @@ def test_claude():
 
 class QuitIn(BaseModel):
     force: bool = False
+
+
+# --- sync (your own Cloudflare R2 bucket)
+
+class SyncConnectIn(BaseModel):
+    account: str
+    bucket: str
+    keyId: str
+    secret: str
+
+
+class SyncJoinIn(BaseModel):
+    code: str
+
+
+def _sync(fn):
+    try:
+        return fn()
+    except sync.SyncError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/sync")
+def sync_status():
+    return sync.status()
+
+
+@app.post("/api/sync/connect")
+def sync_connect(body: SyncConnectIn):
+    return _sync(lambda: sync.connect(body.account, body.bucket, body.keyId, body.secret))
+
+
+@app.post("/api/sync/join")
+def sync_join(body: SyncJoinIn):
+    return _sync(lambda: sync.join(body.code))
+
+
+@app.post("/api/sync/now")
+def sync_now():
+    sync.kick()
+    return sync.status()
+
+
+@app.get("/api/sync/code")
+def sync_code():
+    return _sync(lambda: {"code": sync.code()})
+
+
+@app.delete("/api/sync")
+def sync_off():
+    sync.disconnect()
+    return sync.status()
 
 
 @app.post("/api/update/check")

@@ -327,3 +327,15 @@ a.btn { display: inline-flex; align-items: center; gap: 7px; text-decoration: no
   .para { grid-template-columns: 1fr; gap: 2px; }
   .para .edit { right: 0; }
 }
+
+/* sync */
+.steps { margin: 10px 0 12px; padding-left: 20px; color: var(--muted); font-size: 13.5px; }
+.steps li { margin: 4px 0; }
+.syncform .fld { display: flex; margin-top: 8px; }
+.syncform .fld input { width: 100%; }
+.devices { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 6px; }
+.devices .row { padding: 3px 0; }
+.paircode { display: flex; gap: 16px; align-items: flex-start; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.qr { width: 180px; height: 180px; flex: none; background: #fff; border-radius: 8px; padding: 4px; }
+.qr svg { width: 100%; height: 100%; display: block; }
+.paircode .btn { margin-top: 10px; }

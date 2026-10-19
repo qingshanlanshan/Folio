@@ -74,6 +74,8 @@ function App() {
     addEventListener("focus", reload);
     return () => removeEventListener("focus", reload);
   }, []);
+  const [st] = useStatus();
+  useEffect(() => { if (st?.syncRev) reload(); }, [st?.syncRev]);   // sync brought changes from another device
   const mid = route[2] === "m" ? route[3] : null;
 
   const home = !route[0] && !route.query.get("project");
@@ -306,6 +308,103 @@ function Activity() {
   </div>`;
 }
 
+const ago = (t) => {
+  const s = Date.now() / 1000 - t;
+  return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : new Date(t * 1000).toLocaleDateString();
+};
+
+function QR({ text }) {
+  const q = window.qrcode(0, "M");
+  q.addData(text);
+  q.make();
+  return html`<div class="qr" dangerouslySetInnerHTML=${{ __html: q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }) }} />`;
+}
+
+// Sync between this Mac and the phone through the user's own Cloudflare R2 bucket. Off by default.
+function SyncCard() {
+  const [s, setS] = useState(null);
+  const [mode, setMode] = useState(null);          // "setup" | "join" | null
+  const [f, setF] = useState({ account: "", bucket: "folio-sync", keyId: "", secret: "", code: "" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [code, setCode] = useState(null);
+  const load = () => api("/sync").then(setS).catch(() => {});
+  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, []);
+  if (!s) return null;
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const go = async (path, body) => {
+    setBusy(true); setErr("");
+    try { setS(await api(path, { json: body })); setMode(null); setF((x) => ({ ...x, secret: "", code: "" })); }
+    catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+  const off = async () => {
+    if (!confirm("Turn off sync on this Mac? Nothing is deleted, here or in your bucket. You can join again with a code.")) return;
+    setCode(null); setS(await api("/sync", { method: "DELETE" }));
+  };
+  const showCode = async () => {
+    if (code) return setCode(null);
+    try { setCode((await api("/sync/code")).code); } catch (e) { toast(e.message); }
+  };
+
+  if (!s.enabled) return html`<h3>Sync</h3>
+    <div class="card">
+      <div class="hint" style="margin-top:0">Keep projects, recordings and people the same on this Mac and your phone, through your own
+        Cloudflare R2 storage (free up to 10 GB, about 300 hours of recordings). Everything is encrypted on the device before upload, so
+        Cloudflare can't read it.</div>
+      ${!mode ? html`<div class="row" style="margin-top:10px">
+          <span class="m">Off</span><span class="spacer"></span>
+          <button class="btn" onClick=${() => setMode("join")}>Join with a code</button>
+          <button class="btn primary" onClick=${() => setMode("setup")}>Set up sync</button></div>` : null}
+      ${mode === "setup" ? html`<form class="syncform" onSubmit=${(e) => { e.preventDefault(); go("/sync/connect", { account: f.account, bucket: f.bucket, keyId: f.keyId, secret: f.secret }); }}>
+          <ol class="steps">
+            <li>In the <a href="https://dash.cloudflare.com/?to=/:account/r2/overview" target="_blank">Cloudflare dashboard → R2</a>, create a bucket, for example “folio-sync”.</li>
+            <li>In R2, open <b>Manage API tokens</b> → <b>Create API token</b>. Choose <b>Object Read & Write</b> and limit it to that bucket. Copy the access key ID and secret access key it shows.</li>
+            <li>Fill these in. The account ID is on the R2 overview page.</li>
+          </ol>
+          <label class="fld"><span>Account ID</span><input value=${f.account} onInput=${set("account")} placeholder="32 letters and digits" autocomplete="off" /></label>
+          <label class="fld"><span>Bucket</span><input value=${f.bucket} onInput=${set("bucket")} autocomplete="off" /></label>
+          <label class="fld"><span>Access key ID</span><input value=${f.keyId} onInput=${set("keyId")} autocomplete="off" /></label>
+          <label class="fld"><span>Secret access key</span><input type="password" value=${f.secret} onInput=${set("secret")} autocomplete="off" /></label>
+          ${err ? html`<div class="hint errtext">${err}</div>` : null}
+          <div class="row" style="margin-top:10px"><span class="spacer"></span>
+            <button type="button" class="btn" onClick=${() => { setMode(null); setErr(""); }}>Cancel</button>
+            <button class="btn primary" disabled=${busy || !f.account || !f.bucket || !f.keyId || !f.secret}>${busy ? "Connecting…" : "Connect"}</button></div>
+        </form>` : null}
+      ${mode === "join" ? html`<form class="syncform" onSubmit=${(e) => { e.preventDefault(); go("/sync/join", { code: f.code }); }}>
+          <div class="hint">On the device that already syncs, open Settings → Sync → <b>Code for another device</b>, copy the code and paste it here.</div>
+          <textarea rows="3" value=${f.code} onInput=${set("code")} placeholder="folio1:…" style="width:100%;margin-top:8px"></textarea>
+          ${err ? html`<div class="hint errtext">${err}</div>` : null}
+          <div class="row" style="margin-top:10px"><span class="spacer"></span>
+            <button type="button" class="btn" onClick=${() => { setMode(null); setErr(""); }}>Cancel</button>
+            <button class="btn primary" disabled=${busy || !f.code.trim()}>${busy ? "Joining…" : "Join"}</button></div>
+        </form>` : null}
+    </div>`;
+
+  return html`<h3>Sync</h3>
+    <div class="card">
+      <div class="row"><b>On</b><span class="m" style="margin-left:8px">bucket “${s.bucket}”</span><span class="spacer"></span>
+        <span class=${"m" + (s.error ? " errtext" : "")}>${s.running ? "Syncing…" : s.error ? "Not synced" : s.last ? `Synced ${ago(s.last)}` : "Waiting…"}</span>
+        <button class="btn" disabled=${s.running} onClick=${async () => { setS(await api("/sync/now", { json: {} })); setTimeout(load, 1500); }}>Sync now</button></div>
+      ${s.error ? html`<div class="hint errtext">${s.error}</div>` : null}
+      ${s.devices?.length ? html`<div class="devices">${s.devices.map((d) => html`<div class="row"><span>${d.platform === "android" ? "📱" : "💻"} ${d.name}${d.me ? " (this Mac)" : ""}</span>
+          <span class="spacer"></span><span class="m">${d.me ? "" : `seen ${ago(d.seen)}`}</span></div>`)}</div>` : null}
+      <div class="hint">Synced: projects, finished recordings (audio, transcript, summary) and people. Raw recording tracks stay on
+        each device. Deleting on one device moves it to the Trash on the others.</div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" onClick=${showCode}>${code ? "Hide code" : "Code for another device"}</button><span class="spacer"></span>
+        <button class="btn danger" onClick=${off}>Turn off sync</button></div>
+      ${code ? html`<div class="paircode">
+          <${QR} text=${code} />
+          <div>
+            <div class="hint" style="margin-top:0">In Folio on your phone: Settings → Sync → <b>Scan code</b>. On another Mac: <b>Join with a code</b> and paste it.</div>
+            <div class="hint errtext">Anyone with this code can read and change your Folio data. Don't share it.</div>
+            <button class="btn" onClick=${() => navigator.clipboard.writeText(code).then(() => toast("Code copied"))}>Copy code</button>
+          </div>
+        </div>` : null}
+    </div>`;
+}
+
 function UpdatesCard() {
   const [st, poll] = useStatus();
   const [checking, setChecking] = useState(false);
@@ -384,6 +483,8 @@ function Settings() {
         <span class="m">${month.requests} request${month.requests === 1 ? "" : "s"} · about $${(month.usd || 0).toFixed(2)}</span></div>
       <div class="hint">Estimated from token counts at list prices; your Anthropic console has the exact bill.</div>
     </div>
+
+    <${SyncCard} />
 
     <${UpdatesCard} />
 

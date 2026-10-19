@@ -96,10 +96,14 @@ def set_step(key: str, step: str, progress: float = 0.0) -> None:
 # --- transcription + speakers
 
 def load_tracks(d) -> dict[str, np.ndarray]:
-    """Recorded meetings have mic.flac and/or system.flac; imports have original.*"""
+    """Recorded meetings have mic.flac and/or system.flac; imports have original.*; recordings synced
+    from another device only have audio.m4a."""
     tracks = {n: audio.load(d / f"{n}.flac") for n in ("mic", "system") if (d / f"{n}.flac").exists()}
     if not tracks:
-        tracks = {"main": audio.load(store.original_file(d))}
+        src = store.original_file(d) or (d / "audio.m4a")
+        if not src.exists():
+            raise RuntimeError("No audio found for this recording.")
+        tracks = {"main": audio.load(src)}
     n = max(len(a) for a in tracks.values())
     return {k: np.pad(a, (0, n - len(a))) for k, a in tracks.items()}
 
