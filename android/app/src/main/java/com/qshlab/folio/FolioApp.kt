@@ -27,6 +27,7 @@ class FolioApp : Application() {
         recorder = Recorder(engine)
         engine.recording = { recorder.active }
         engine.resume()
+        com.qshlab.folio.sync.Sync.start(this)
     }
 
     companion object {

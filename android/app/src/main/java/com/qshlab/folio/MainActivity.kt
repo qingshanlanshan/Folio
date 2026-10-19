@@ -44,10 +44,16 @@ class MainActivity : ComponentActivity() {
             android.util.Log.i("FolioSelfTest", r)
             FolioApp.instance.lastError.value = r
         }.start()
+        // Debug builds: join sync with a code passed by adb (typing long codes on an emulator is unreliable).
+        val debuggable = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0
+        if (debuggable) i.getStringExtra("syncCode")?.let { code -> Thread {
+            val r = runCatching { com.qshlab.folio.sync.Sync.join(code); "joined" }.getOrElse { it.message ?: "failed" }
+            android.util.Log.i("FolioSync", r)
+        }.start() }
         val pid = i.getStringExtra("pid"); val mid = i.getStringExtra("mid")
         if (pid != null && mid != null) openMeeting.value = pid to mid
     }
 
-    override fun onStart() { super.onStart(); FolioApp.instance.engine.foreground = true }
+    override fun onStart() { super.onStart(); FolioApp.instance.engine.foreground = true; com.qshlab.folio.sync.Sync.kick() }
     override fun onStop() { super.onStop(); FolioApp.instance.engine.foreground = false }
 }

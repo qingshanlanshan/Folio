@@ -15,8 +15,8 @@ android {
         // Android 10: foreground-service types and capturing other apps' audio.
         minSdk = 29
         targetSdk = 37
-        versionCode = 2
-        versionName = "0.1.0"
+        versionCode = 3
+        versionName = "0.2.0"
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -75,6 +75,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.media3.exoplayer)
     implementation(libs.anthropic.java)
+    // Scanning the sync code from the Mac (Google Play services scanner: no camera permission needed).
+    implementation(libs.code.scanner)
     // On-device speech (k2-fsa/sherpa-onnx, Apache-2.0), trimmed to arm64-v8a.
     implementation(files("libs/sherpa-onnx-1.13.8-arm64.aar"))
 

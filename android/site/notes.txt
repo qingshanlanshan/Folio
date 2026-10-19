@@ -1,1 +1,1 @@
-Folio 0.1.0: first release.
+Folio 0.2.0: optional sync with the Mac through your own Cloudflare R2 storage (Settings → Sync).

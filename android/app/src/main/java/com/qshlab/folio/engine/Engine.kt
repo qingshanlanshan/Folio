@@ -183,7 +183,7 @@ class Engine(private val ctx: Context, val store: Store, val models: ModelStore)
                 if (t.kind == "process" && claude.key != null) submit(t.pid, t.mid, "summarize")
                 else Notify.done(ctx, this, t)
             }
-            if (_tasks.value.isEmpty()) FolioService.ensure(ctx)
+            if (_tasks.value.isEmpty()) { FolioService.ensure(ctx); com.qshlab.folio.sync.Sync.kick() }
         }
     }
 

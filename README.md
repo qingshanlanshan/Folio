@@ -35,6 +35,15 @@ Models: speaker/VAD models go in `models/` (`pyannote-segmentation-3-0.onnx`, `s
 `nemo_en_titanet_small.onnx`, from the [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases)).
 Parakeet, Whisper and Qwen download from Hugging Face on first use (~2.5 + 1.6 + 4.6 GB).
 
+## Sync (optional)
+
+Off by default. Settings → Sync connects your own Cloudflare R2 bucket (free tier: 10 GB); the Mac and
+Android apps then keep projects, finished recordings (audio.m4a, transcript, summary, fixes, voices) and
+people in step. Everything is AES-256-GCM encrypted on the device with a key that only travels inside
+the pairing code (QR on the Mac, scanned or pasted on the phone). Each device only adds new objects
+(change batches + content-addressed 8 MiB pieces); per file, the highest (clock, device) wins; deletions
+go to the Trash. Protocol: `folio/sync.py` (Mac) and `android/…/sync/Sync.kt` (same format).
+
 ## Data
 
 Plain files under `~/Folio` (override with `FOLIO_HOME`):

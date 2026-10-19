@@ -52,7 +52,11 @@ import com.qshlab.folio.FolioApp
 import com.qshlab.folio.ai.CLAUDE_MODELS
 import com.qshlab.folio.ai.Search
 import com.qshlab.folio.speech.MODELS
+import com.qshlab.folio.sync.Sync
 import com.qshlab.folio.update.Updates
+import com.google.mlkit.vision.barcode.common.Barcode
+import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
+import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -217,6 +221,8 @@ fun SettingsScreen(nav: NavHostController) {
             test?.let { Hint(it) }
             Hint("This month: ${month.requests} request${if (month.requests == 1) "" else "s"} · about $${"%.2f".format(month.usd)} (estimated; your Anthropic console has the exact bill)")
 
+            SyncSection()
+
             Text("Speech models", fontFamily = Serif, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
             Hint("Transcription runs on this phone. Download once, on Wi-Fi.")
             for (m in MODELS) Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer)) {
@@ -255,6 +261,120 @@ fun SettingsScreen(nav: NavHostController) {
             Hint("Folio ${Updates.installedVersionName(ctx)} · speech by sherpa-onnx (Apache-2.0) with NVIDIA Parakeet (CC-BY-4.0) · test clip from the AMI corpus (CC BY 4.0).", Modifier.padding(top = 16.dp))
         }
     }
+}
+
+// ---------- sync
+
+private fun ago(t: Double): String {
+    val s = System.currentTimeMillis() / 1000.0 - t
+    return when { s < 60 -> "just now"; s < 3600 -> "${(s / 60).toInt()} min ago"; s < 86400 -> "${(s / 3600).toInt()} h ago"; else -> whenText(t) }
+}
+
+/** Sync with the Mac through the user's own Cloudflare R2 bucket. Off by default. */
+@Composable
+fun SyncSection() {
+    val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val cfg by Sync.config.collectAsState()
+    val st by Sync.status.collectAsState()
+    var mode by remember { mutableStateOf<String?>(null) }      // "paste" | "setup"
+    var account by remember { mutableStateOf("") }
+    var bucket by remember { mutableStateOf("folio-sync") }
+    var keyId by remember { mutableStateOf("") }
+    var secret by remember { mutableStateOf("") }
+    var code by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var err by remember { mutableStateOf<String?>(null) }
+    var showCode by remember { mutableStateOf(false) }
+    var confirmOff by remember { mutableStateOf(false) }
+
+    fun act(block: () -> Unit) {
+        busy = true; err = null
+        scope.launch {
+            err = withContext(Dispatchers.IO) { runCatching { block(); null }.getOrElse { it.message ?: "Something went wrong." } }
+            busy = false
+            if (err == null) { mode = null; secret = ""; code = "" }
+        }
+    }
+    fun scan() {
+        val opts = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+        GmsBarcodeScanning.getClient(ctx, opts).startScan()
+            .addOnSuccessListener { b -> b.rawValue?.let { v -> act { Sync.join(v) } } }
+            .addOnFailureListener { err = "Couldn't open the scanner. Paste the code instead." }
+    }
+
+    Text("Sync", fontFamily = Serif, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
+    val c = cfg
+    if (c == null) {
+        Hint("Keep projects, recordings and people the same on this phone and your Mac, through your own Cloudflare R2 storage (free up to 10 GB). Everything is encrypted on the phone before upload, so Cloudflare can't read it.")
+        when (mode) {
+            null -> {
+                Hint("On your Mac: Folio → Settings → Sync → “Code for another device”, then scan it here.")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button({ scan() }, enabled = !busy) { Text(if (busy) "Joining…" else "Scan code") }
+                    OutlinedButton({ mode = "paste"; err = null }) { Text("Paste code") }
+                }
+                TextButton({ mode = "setup"; err = null }) { Text("No Mac yet? Set up sync on this phone") }
+            }
+            "paste" -> {
+                OutlinedTextField(code, { code = it.trim() }, Modifier.fillMaxWidth(), placeholder = { Text("folio1:…") }, minLines = 2,
+                    keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Uri))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button({ act { Sync.join(code) } }, enabled = !busy && code.isNotBlank()) { Text(if (busy) "Joining…" else "Join") }
+                    TextButton({ mode = null; err = null }) { Text("Cancel") }
+                }
+            }
+            "setup" -> {
+                Hint("1. In the Cloudflare dashboard → R2, create a bucket, for example “folio-sync”.\n2. In R2 → Manage API tokens → Create API token: Object Read & Write, limited to that bucket. Copy the access key ID and secret.\n3. Fill these in. The account ID is on the R2 overview page.")
+                OutlinedTextField(account, { account = it }, Modifier.fillMaxWidth(), label = { Text("Account ID") }, singleLine = true)
+                OutlinedTextField(bucket, { bucket = it }, Modifier.fillMaxWidth(), label = { Text("Bucket") }, singleLine = true)
+                OutlinedTextField(keyId, { keyId = it }, Modifier.fillMaxWidth(), label = { Text("Access key ID") }, singleLine = true)
+                OutlinedTextField(secret, { secret = it }, Modifier.fillMaxWidth(), label = { Text("Secret access key") }, singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button({ act { Sync.connect(account, bucket, keyId, secret) } },
+                        enabled = !busy && listOf(account, bucket, keyId, secret).all { it.isNotBlank() }) { Text(if (busy) "Connecting…" else "Connect") }
+                    TextButton({ mode = null; err = null }) { Text("Cancel") }
+                }
+            }
+        }
+        err?.let { Hint(it, color = MaterialTheme.colorScheme.error) }
+        return
+    }
+
+    val devices = remember(st) { Sync.devices() }
+    Text("On · bucket “${c.bucket}”", fontWeight = FontWeight.SemiBold)
+    Hint(when { st.running -> "Syncing…"; st.error != null -> st.error!!; st.last != null -> "Synced ${ago(st.last!!)}"; else -> "Waiting…" },
+        color = if (st.error != null && !st.running) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+    for (d in devices) Row(Modifier.fillMaxWidth()) {
+        Text((if (d.platform == "android") "📱 " else "💻 ") + d.name + (if (d.me) " (this phone)" else ""), Modifier.weight(1f))
+        if (!d.me) Hint("seen ${ago(d.seen)}")
+    }
+    Hint("Synced: projects, finished recordings (audio, transcript, summary) and people. Deleting on one device moves it to the trash on the others.")
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        OutlinedButton({ Sync.kick() }, enabled = !st.running) { Text("Sync now") }
+        OutlinedButton({ showCode = true }) { Text("Code for another device") }
+    }
+    TextButton({ confirmOff = true }) { Text("Turn off sync", color = MaterialTheme.colorScheme.error) }
+
+    if (showCode) AlertDialog(onDismissRequest = { showCode = false },
+        title = { Text("Code for another device") },
+        text = { Text("Anyone with this code can read and change your Folio data. Send it only to yourself, then paste it in Folio on the other device (Settings → Sync).") },
+        confirmButton = { TextButton({
+            showCode = false
+            ctx.startActivity(android.content.Intent.createChooser(android.content.Intent(android.content.Intent.ACTION_SEND)
+                .setType("text/plain").putExtra(android.content.Intent.EXTRA_TEXT, Sync.code()), "Send the sync code"))
+        }) { Text("Share") } },
+        dismissButton = { TextButton({
+            showCode = false
+            (ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                .setPrimaryClip(android.content.ClipData.newPlainText("Folio sync code", Sync.code()))
+        }) { Text("Copy") } })
+    if (confirmOff) AlertDialog(onDismissRequest = { confirmOff = false },
+        title = { Text("Turn off sync?") },
+        text = { Text("Nothing is deleted, here or in your bucket. You can join again with a code.") },
+        confirmButton = { TextButton({ confirmOff = false; Sync.disconnect() }) { Text("Turn off", color = MaterialTheme.colorScheme.error) } },
+        dismissButton = { TextButton({ confirmOff = false }) { Text("Cancel") } })
 }
 
 // ---------- activity
