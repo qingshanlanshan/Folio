@@ -217,7 +217,7 @@ fun MeetingScreen(nav: NavHostController, pid: String, midAndT: String) {
                                         withStyle(SpanStyle(color = MaterialTheme.colorScheme.error, textDecoration = TextDecoration.LineThrough)) { append(f.old) }
                                         append(" → ")
                                         withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)) { append(f.new) }
-                                    }, fontFamily = Serif)
+                                    }, fontFamily = Heading)
                                     Hint("${SOURCE[f.source]}${if (f.why.isNotEmpty()) " · ${f.why}" else ""}")
                                 }
                                 TextButton({ engine.fixes.decide(pid, mid, setOf(f.id), false); v++ }) { Text("✕") }
@@ -289,7 +289,7 @@ private fun ParagraphRow(t: Transcript, p: Paragraph, pos: Double, playing: Bool
             detectTapGestures(onTap = { off ->
                 layout?.let { l -> val o = l.getOffsetForPosition(off); val i = starts.indexOfLast { it <= o }.coerceAtLeast(0); onSeek(words[i].start) }
             }, onLongPress = { onEdit() })
-        }, fontFamily = Serif, fontSize = 16.sp, lineHeight = 25.sp, onTextLayout = { layout = it })
+        }, fontFamily = Heading, fontSize = 16.sp, lineHeight = 25.sp, onTextLayout = { layout = it })
     }
 }
 
@@ -375,7 +375,7 @@ private fun SummaryView(pid: String, mid: String, s: com.qshlab.folio.data.Summa
     }
     val todos = remember(s.at) { app.engine.summaries.todos(pid).filter { it.closedBy?.meeting == mid } }
     Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(s.overview, fontFamily = Serif, fontSize = 17.sp, lineHeight = 26.sp)
+        Text(s.overview, fontFamily = Heading, fontSize = 17.sp, lineHeight = 26.sp)
         @Composable fun head(x: String) = Text(x.uppercase(), Modifier.padding(top = 14.dp), style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
         @Composable fun bullet(content: @Composable () -> Unit) = Row { Text("•  "); content() }
@@ -383,15 +383,15 @@ private fun SummaryView(pid: String, mid: String, s: com.qshlab.folio.data.Summa
             Text(buildAnnotatedString {
                 if (x.start.isNotEmpty()) withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary)) { append(x.start + "  ") }
                 withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(x.title) }; append(" — " + x.summary)
-            }, Modifier.clickable { x.start.split(":").mapNotNull { it.toIntOrNull() }.takeIf { it.size == 2 }?.let { jump(it[0] * 60.0 + it[1]) } }, fontFamily = Serif)
+            }, Modifier.clickable { x.start.split(":").mapNotNull { it.toIntOrNull() }.takeIf { it.size == 2 }?.let { jump(it[0] * 60.0 + it[1]) } }, fontFamily = Heading)
         } }
-        if (s.decisions.isNotEmpty()) { head("Decisions"); for (x in s.decisions) bullet { Text(x, fontFamily = Serif) } }
+        if (s.decisions.isNotEmpty()) { head("Decisions"); for (x in s.decisions) bullet { Text(x, fontFamily = Heading) } }
         if (s.actionItems.isNotEmpty()) { head("Action items"); for (x in s.actionItems) bullet {
-            Text(x.task + (if (x.owner.isNotEmpty()) " — ${x.owner}" else "") + (if (x.due.isNotEmpty()) " (due ${x.due})" else ""), fontFamily = Serif)
+            Text(x.task + (if (x.owner.isNotEmpty()) " — ${x.owner}" else "") + (if (x.due.isNotEmpty()) " (due ${x.due})" else ""), fontFamily = Heading)
         } }
-        if (todos.isNotEmpty()) { head("Done since earlier meetings"); for (x in todos) bullet { Text(x.text, fontFamily = Serif, textDecoration = TextDecoration.LineThrough) } }
-        if (s.progress.isNotEmpty()) { head("Progress"); for (x in s.progress) bullet { Text("${x.area}: ${x.update}", fontFamily = Serif) } }
-        if (s.openQuestions.isNotEmpty()) { head("Open questions"); for (x in s.openQuestions) bullet { Text(x, fontFamily = Serif) } }
+        if (todos.isNotEmpty()) { head("Done since earlier meetings"); for (x in todos) bullet { Text(x.text, fontFamily = Heading, textDecoration = TextDecoration.LineThrough) } }
+        if (s.progress.isNotEmpty()) { head("Progress"); for (x in s.progress) bullet { Text("${x.area}: ${x.update}", fontFamily = Heading) } }
+        if (s.openQuestions.isNotEmpty()) { head("Open questions"); for (x in s.openQuestions) bullet { Text(x, fontFamily = Heading) } }
         if (!s.updatedState) Hint("This is an older meeting, so re-summarizing it didn't change the project state.", Modifier.padding(top = 10.dp))
         Hint("Written by ${s.writer.ifEmpty { "Claude" }} using the project's knowledge, state, to-dos and earlier meetings.", Modifier.padding(top = 10.dp))
     }

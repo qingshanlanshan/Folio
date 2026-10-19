@@ -238,10 +238,10 @@ fun LiveCard(live: com.qshlab.folio.engine.LiveState, full: Boolean = false) {
                         if (both) withStyle(SpanStyle(fontWeight = FontWeight.SemiBold, color = if (e.track == "mic") speakerColor(0) else speakerColor(1))) { append(if (e.track == "mic") "You  " else "Others  ") }
                         withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) { append(clock(e.start) + "  ") }
                         append(e.text)
-                    }, Modifier.padding(vertical = 3.dp), fontFamily = Serif, fontSize = 15.sp)
+                    }, Modifier.padding(vertical = 3.dp), fontFamily = Heading, fontSize = 15.sp)
                 }
                 live.partials.forEach { (tr, p) -> item { Text((if (both) (if (tr == "mic") "You  " else "Others  ") else "") + p, fontStyle = FontStyle.Italic,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = Serif, fontSize = 15.sp) } }
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, fontFamily = Heading, fontSize = 15.sp) } }
             }
             Hint("Draft. After you stop, the whole recording is transcribed again with speakers.", Modifier.padding(top = 6.dp))
         }
@@ -315,7 +315,7 @@ private fun Overview(nav: NavHostController, pid: String, version: Int) {
     answer?.let { a ->
         Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer)) {
             Column(Modifier.padding(12.dp)) {
-                Text(a.text, fontFamily = Serif, fontSize = 15.sp)
+                Text(a.text, fontFamily = Heading, fontSize = 15.sp)
                 if (a.sources.isNotEmpty()) Hint("Passages:", Modifier.padding(top = 8.dp))
                 for (h in a.sources.take(5)) Text("${h.title}, ${clock(h.start)}", Modifier.clickable {
                     nav.navigate("meeting/${enc(h.project)}/${enc(h.meeting)}?t=${h.start}")

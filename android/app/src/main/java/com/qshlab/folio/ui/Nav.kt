@@ -107,7 +107,7 @@ fun FolioNav(activity: MainActivity) {
 @Composable
 fun Screen(nav: NavHostController, title: String, actions: @Composable () -> Unit = {}, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = Serif) },
+        TopAppBar(title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = Heading) },
             navigationIcon = { IconButton({ nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             actions = { actions() },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background))
@@ -129,7 +129,7 @@ fun Home(nav: NavHostController, activity: MainActivity) {
 
     Scaffold(
         topBar = {
-            TopAppBar(title = { Text("Folio", fontFamily = Serif, fontWeight = FontWeight.SemiBold) },
+            TopAppBar(title = { Text("Folio", fontFamily = Heading, fontWeight = FontWeight.SemiBold) },
                 actions = {
                     IconButton({ nav.navigate("search?q=&person=") }) { Icon(Icons.Default.Search, "Search") }
                     IconButton({ nav.navigate("people") }) { Icon(Icons.Default.People, "People") }

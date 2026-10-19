@@ -31,7 +31,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-val Accent = Color(0xFF2F5D50)
+val Accent = Color(0xFF3F51D1)
 val RecRed = Color(0xFFD23B2E)
 val SPEAKER_COLORS = listOf(0xFF2F7D6B, 0xFFB5603B, 0xFF4A6FB5, 0xFF9A5AA8, 0xFFB08A2E, 0xFF3F8FA6, 0xFFA8485F, 0xFF6B7D3A).map { Color(it) }
 fun speakerColor(spk: Int?) = if (spk == null) Color.Gray else SPEAKER_COLORS[spk % SPEAKER_COLORS.size]
@@ -40,20 +40,21 @@ fun speakerColor(spk: Int?) = if (spk == null) Color.Gray else SPEAKER_COLORS[sp
 fun FolioTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
     val colors = if (dark) darkColorScheme(
-        primary = Color(0xFF7FB8A4), onPrimary = Color(0xFF10201B), primaryContainer = Color(0xFF263430), onPrimaryContainer = Color(0xFFCFE6DD),
-        background = Color(0xFF181A19), surface = Color(0xFF181A19), surfaceContainer = Color(0xFF202322), surfaceContainerHigh = Color(0xFF262A28),
-        surfaceContainerLow = Color(0xFF1C1E1D), onSurface = Color(0xFFE8E6E0), onSurfaceVariant = Color(0xFF9AA09B), outlineVariant = Color(0xFF333735),
-        error = Color(0xFFE08A72),
+        primary = Color(0xFF8B9BFF), onPrimary = Color(0xFF0F1430), primaryContainer = Color(0xFF232A4A), onPrimaryContainer = Color(0xFFDDE2FF),
+        background = Color(0xFF121419), surface = Color(0xFF121419), surfaceContainer = Color(0xFF1A1D24), surfaceContainerHigh = Color(0xFF20242C),
+        surfaceContainerLow = Color(0xFF16181E), onSurface = Color(0xFFE5E8EE), onSurfaceVariant = Color(0xFF949CAD), outlineVariant = Color(0xFF2A2E38),
+        error = Color(0xFFF0907B),
     ) else lightColorScheme(
-        primary = Accent, onPrimary = Color.White, primaryContainer = Color(0xFFE3ECE8), onPrimaryContainer = Accent,
-        background = Color(0xFFF7F5F0), surface = Color(0xFFF7F5F0), surfaceContainer = Color(0xFFFFFFFF), surfaceContainerHigh = Color(0xFFEFECE4),
-        surfaceContainerLow = Color(0xFFFBFAF7), onSurface = Color(0xFF1F2421), onSurfaceVariant = Color(0xFF6B716C), outlineVariant = Color(0xFFE2DED4),
-        error = Color(0xFFA5442F),
+        primary = Accent, onPrimary = Color.White, primaryContainer = Color(0xFFE8EBFB), onPrimaryContainer = Accent,
+        background = Color(0xFFF6F7F9), surface = Color(0xFFF6F7F9), surfaceContainer = Color(0xFFFFFFFF), surfaceContainerHigh = Color(0xFFEEF0F4),
+        surfaceContainerLow = Color(0xFFFAFBFC), onSurface = Color(0xFF1B2130), onSurfaceVariant = Color(0xFF626B7D), outlineVariant = Color(0xFFE1E5EC),
+        error = Color(0xFFC2412D),
     )
     MaterialTheme(colorScheme = colors, content = content)
 }
 
-val Serif = FontFamily.Serif
+/** Titles: the same clean sans-serif as the Mac app (Folio used a book-like serif before). */
+val Heading = FontFamily.Default
 
 fun clock(s: Double): String {
     val h = (s / 3600).toInt(); val m = ((s % 3600) / 60).toInt(); val x = (s % 60).toInt()
@@ -88,7 +89,7 @@ fun Avatar(name: String) {
 
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) =
-    Text(text, modifier.padding(top = 20.dp, bottom = 6.dp), fontFamily = Serif, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+    Text(text, modifier.padding(top = 20.dp, bottom = 6.dp), fontFamily = Heading, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
 
 @Composable
 fun Hint(text: String, modifier: Modifier = Modifier, color: Color = MaterialTheme.colorScheme.onSurfaceVariant) =
@@ -105,8 +106,8 @@ fun Markdownish(text: String) {
                 line.startsWith("#") -> Text(line.trimStart('#').trim().uppercase(), Modifier.padding(top = 10.dp),
                     style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
                 line.trimStart().startsWith("- ") || line.trimStart().startsWith("* ") ->
-                    Row { Text("•  ", fontFamily = Serif); Text(bold(line.trimStart().drop(2)), fontFamily = Serif, fontSize = 15.sp) }
-                else -> Text(bold(line), fontFamily = Serif, fontSize = 15.sp)
+                    Row { Text("•  ", fontFamily = Heading); Text(bold(line.trimStart().drop(2)), fontFamily = Heading, fontSize = 15.sp) }
+                else -> Text(bold(line), fontFamily = Heading, fontSize = 15.sp)
             }
         }
     }

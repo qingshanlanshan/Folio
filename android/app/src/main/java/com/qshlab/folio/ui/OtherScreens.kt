@@ -163,7 +163,7 @@ fun SearchScreen(nav: NavHostController, initial: String, person: String?) {
                             Column(Modifier.padding(12.dp)) {
                                 Row { Text(h.title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold); Hint(clock(h.start)) }
                                 Hint("${h.projectName} · ${whenText(h.date)}")
-                                Text("${h.speaker}: ${h.snippet}", fontFamily = Serif, fontSize = 15.sp, modifier = Modifier.padding(top = 4.dp))
+                                Text("${h.speaker}: ${h.snippet}", fontFamily = Heading, fontSize = 15.sp, modifier = Modifier.padding(top = 4.dp))
                             }
                         }
                     }
@@ -195,7 +195,7 @@ fun SettingsScreen(nav: NavHostController) {
 
     Screen(nav, "Settings") {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Claude", fontFamily = Serif, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            Text("Claude", fontFamily = Heading, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             Hint("Summaries, transcript fixes and questions are written by Claude. Only text (transcripts and project notes) is sent to Anthropic; audio stays on this phone.")
             Text("Model", fontWeight = FontWeight.SemiBold)
             for (m in CLAUDE_MODELS) Row(Modifier.fillMaxWidth().clickable { claude.modelId = m.id; v++ }, verticalAlignment = Alignment.CenterVertically) {
@@ -223,7 +223,7 @@ fun SettingsScreen(nav: NavHostController) {
 
             SyncSection()
 
-            Text("Speech models", fontFamily = Serif, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
+            Text("Speech models", fontFamily = Heading, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
             Hint("Transcription runs on this phone. Download once, on Wi-Fi.")
             for (m in MODELS) Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer)) {
                 Column(Modifier.padding(12.dp)) {
@@ -241,10 +241,10 @@ fun SettingsScreen(nav: NavHostController) {
             }
             TextButton({ nav.navigate("speedtest") }) { Text("Speed & battery test →") }
 
-            Text("Notifications", fontFamily = Serif, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
+            Text("Notifications", fontFamily = Heading, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
             Hint("While recording or processing, Folio shows an ongoing notification (with Stop). When a transcript finishes and Folio isn't open, it tells you.")
 
-            Text("Updates", fontFamily = Serif, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
+            Text("Updates", fontFamily = Heading, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
             Hint("Installed: ${Updates.installedVersionName(ctx)}. New versions come from folio.qshlab.com.")
             var auto by remember { mutableStateOf(Updates.autoCheck(ctx)) }
             Row(verticalAlignment = Alignment.CenterVertically) { Text("Check automatically", Modifier.weight(1f)); Switch(auto, { auto = it; Updates.setAutoCheck(ctx, it) }) }
@@ -303,7 +303,7 @@ fun SyncSection() {
             .addOnFailureListener { err = "Couldn't open the scanner. Paste the code instead." }
     }
 
-    Text("Sync", fontFamily = Serif, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
+    Text("Sync", fontFamily = Heading, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 16.dp))
     val c = cfg
     if (c == null) {
         Hint("Keep projects, recordings and people the same on this phone and your Mac, through your own Cloudflare R2 storage (free up to 10 GB). Everything is encrypted on the phone before upload, so Cloudflare can't read it.")
