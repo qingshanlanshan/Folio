@@ -1,1 +1,1 @@
-Folio 0.4.0: Record, Projects and People tabs; record into Unsorted and move recordings to a project later; sync fixes (no duplicate devices, Settings updates right away).
+Folio 0.4.1: long-press recordings, projects and people for quick actions (rename, move, delete); a smaller record bar on project pages; Unsorted is a simple list.

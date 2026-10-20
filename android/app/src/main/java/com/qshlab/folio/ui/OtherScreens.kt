@@ -73,7 +73,7 @@ fun PeopleScreen(nav: NavHostController) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item { Hint("Shared across projects. Name a speaker in any recording to add them; their voice is recognised next time.") }
             items(people, key = { it.id }) { p ->
-                Card(Modifier.fillMaxWidth().clickable { nav.navigate("person/${enc(p.id)}") }, colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer)) {
+                MenuCard({ nav.navigate("person/${enc(p.id)}") }, personActions(nav, p.id, p.name)) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Avatar(p.name); Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {

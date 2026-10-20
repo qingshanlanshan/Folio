@@ -76,6 +76,7 @@ function App() {
   }, []);
   const [st] = useStatus();
   useEffect(() => { if (st?.syncRev) reload(); }, [st?.syncRev]);   // sync brought changes from another device
+  useChanged(reload);
   const mid = route[2] === "m" ? route[3] : null;
 
   const home = !route[0] && !route.query.get("project");
@@ -92,7 +93,91 @@ function App() {
         : route[0] === "settings" ? html`<${Settings} />`
         : html`<${RecordPage} projects=${projects} preset=${route.query.get("project")} reloadProjects=${reload} />`}
     </main>
+    <${ContextMenu} />
   </div>`;
+}
+
+// ---------- right-click menus
+
+// openMenu(event, items): items are { label, run, danger } or null for a divider, or { heading }.
+let showMenu = null;
+function openMenu(e, items) { e.preventDefault(); e.stopPropagation(); showMenu && showMenu({ x: e.clientX, y: e.clientY, items }); }
+
+// Something changed through a menu: pages listening re-read their data.
+function changed() { dispatchEvent(new Event("folio-changed")); }
+function useChanged(f) { useEffect(() => { addEventListener("folio-changed", f); return () => removeEventListener("folio-changed", f); }, [f]); }
+
+function ContextMenu() {
+  const [m, setM] = useState(null);
+  showMenu = setM;
+  useEffect(() => {
+    if (!m) return;
+    const close = () => setM(null);
+    const key = (e) => { if (e.key === "Escape") close(); };
+    setTimeout(() => { addEventListener("click", close); addEventListener("contextmenu", close); }, 0);
+    addEventListener("keydown", key); addEventListener("blur", close); addEventListener("scroll", close, true);
+    return () => { removeEventListener("click", close); removeEventListener("contextmenu", close); removeEventListener("keydown", key); removeEventListener("blur", close); removeEventListener("scroll", close, true); };
+  }, [m]);
+  if (!m) return null;
+  const h = m.items.length * 30 + 12;
+  return html`<div class="ctxmenu" style=${`left:${Math.min(m.x, innerWidth - 230)}px;top:${Math.max(8, Math.min(m.y, innerHeight - h - 8))}px`}>
+    ${m.items.map((it) => !it ? html`<hr />` : it.heading ? html`<div class="ctxhead">${it.heading}</div>`
+      : html`<button class=${it.danger ? "danger" : ""} onClick=${(e) => { e.stopPropagation(); setM(null); it.run(); }}>${it.label}</button>`)}
+  </div>`;
+}
+
+const mbase = (pid, mid) => `/projects/${encodeURIComponent(pid)}/meetings/${encodeURIComponent(mid)}`;
+
+function recordingMenu(pid, m, projects) {
+  const others = (projects || []).filter((x) => x.id !== pid);
+  return [
+    { label: "Open", run: () => { location.hash = `#/p/${encodeURIComponent(pid)}/m/${encodeURIComponent(m.id)}`; } },
+    { label: "Rename…", run: async () => {
+      const t = prompt("Rename the recording", m.title);
+      if (t && t.trim() && t !== m.title) { try { await api(mbase(pid, m.id), { method: "PATCH", json: { title: t.trim() } }); changed(); } catch (e) { toast(e.message); } }
+    } },
+    others.length ? { heading: pid === "_unsorted" ? "Move to project" : "Move to" } : false,
+    ...others.map((x) => ({ label: "    " + (x.builtin ? "Unsorted" : x.name), run: async () => {
+      try { await api(mbase(pid, m.id) + "/move", { json: { to: x.id } }); toast(x.builtin ? "Moved to Unsorted" : `Moved to ${x.name} — summarizing it with that project's context`); changed(); }
+      catch (e) { toast(e.message); }
+    } })),
+    null,
+    { label: "Delete…", danger: true, run: async () => {
+      if (!confirm(`Delete “${m.title}”? It moves to the macOS Trash.`)) return;
+      try { await api(mbase(pid, m.id), { method: "DELETE" }); changed(); if (location.hash.includes("/m/" + encodeURIComponent(m.id))) location.hash = "#/p/" + encodeURIComponent(pid); } catch (e) { toast(e.message); }
+    } },
+  ].filter((x) => x !== false);
+}
+
+function projectMenu(p) {
+  const items = [{ label: "Open", run: () => { location.hash = "#/p/" + encodeURIComponent(p.id); } },
+    { label: "New recording here", run: () => { location.hash = "#/?project=" + encodeURIComponent(p.id); } }];
+  if (p.builtin) return items;
+  return [...items,
+    { label: "Rename…", run: async () => {
+      const n = prompt("Rename the project", p.name);
+      if (n && n.trim() && n !== p.name) { try { await api(`/projects/${encodeURIComponent(p.id)}`, { method: "PUT", json: { name: n.trim() } }); changed(); } catch (e) { toast(e.message); } }
+    } },
+    null,
+    { label: "Delete…", danger: true, run: async () => {
+      const n = p.meetings || 0;
+      if (!confirm(`Delete the project “${p.name}”${n ? ` and its ${n} recording${n === 1 ? "" : "s"}` : ""}? Everything moves to the macOS Trash.`)) return;
+      try { await api(`/projects/${encodeURIComponent(p.id)}`, { method: "DELETE" }); changed(); if (location.hash.startsWith("#/p/" + encodeURIComponent(p.id))) location.hash = "#/"; } catch (e) { toast(e.message); }
+    } }];
+}
+
+function personMenu(p) {
+  return [{ label: "Open", run: () => { location.hash = "#/people/" + p.id; } },
+    { label: "Everything they said", run: () => { location.hash = "#/search/" + encodeURIComponent("@" + p.id); } },
+    { label: "Rename…", run: async () => {
+      const n = prompt("Rename", p.name);
+      if (n && n.trim() && n !== p.name) { try { await api("/people/" + p.id, { method: "PUT", json: { name: n.trim() } }); changed(); } catch (e) { toast(e.message); } }
+    } },
+    null,
+    { label: "Remove…", danger: true, run: async () => {
+      if (!confirm(`Remove ${p.name}? Recordings keep their text; the speaker just becomes unnamed.`)) return;
+      try { await api("/people/" + p.id, { method: "DELETE" }); changed(); if (location.hash === "#/people/" + p.id) location.hash = "#/people"; } catch (e) { toast(e.message); }
+    } }];
 }
 
 // Back goes to the previous page; opened directly, it goes to the recorder.
@@ -131,9 +216,9 @@ function Sidebar({ projects, pid, route, reload }) {
     </div>
     <div class="sidelist">
       <h4>Projects</h4>
-      ${builtin ? html`<a class=${"plink unsorted" + (builtin.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(builtin.id)}>
+      ${builtin ? html`<a class=${"plink unsorted" + (builtin.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(builtin.id)} onContextMenu=${(e) => openMenu(e, projectMenu(builtin))}>
         <span>Unsorted</span><small>${builtin.meetings || ""}</small></a>` : null}
-      ${(projects || []).filter((p) => !p.builtin).map((p) => html`<a class=${"plink" + (p.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(p.id)}>
+      ${(projects || []).filter((p) => !p.builtin).map((p) => html`<a class=${"plink" + (p.id === pid ? " on" : "")} href=${"#/p/" + encodeURIComponent(p.id)} onContextMenu=${(e) => openMenu(e, projectMenu(p))}>
         <span>${p.name}</span><small>${p.meetings || ""}</small></a>`)}
       ${adding
         ? html`<form onSubmit=${create}><${FocusInput} placeholder="Project or course name" value=${name}
@@ -526,6 +611,7 @@ function Project({ pid, reloadProjects }) {
   const load = useCallback(() => api(`/projects/${encodeURIComponent(pid)}`).then(setP).catch((e) => toast(e.message)), [pid]);
   const [uploading, upload] = useUpload(pid, load);
   useEffect(() => { load(); }, [load]);
+  useChanged(load);
   const busy = p && (Object.keys(p.jobs).length || p.meetings.some((m) => m.status === "queued" || m.status === "processing"));
   useEffect(() => {
     if (!busy) return;
@@ -558,7 +644,7 @@ function Project({ pid, reloadProjects }) {
       ${p.builtin ? html`<h1>Unsorted</h1>` : html`<h1><input value=${p.name} onChange=${(e) => rename(e.target.value)} title="Click to rename" /></h1>`}
       ${actions}
     </div>
-    <div class="sub">${p.builtin ? "Recordings not filed in a project yet. Move each one to a project to summarize it with that project's context." : `${p.meetings.length} recording${p.meetings.length === 1 ? "" : "s"} · drop audio or video files anywhere here to import`}</div>
+    <div class="sub">${p.builtin ? "Recordings you haven't filed yet. Right-click one (or use Move…) to move it to a project; it's then summarized with that project's notes and earlier meetings." : `${p.meetings.length} recording${p.meetings.length === 1 ? "" : "s"} · drop audio or video files anywhere here to import`}</div>
     ${p.builtin ? html`<${Meetings} p=${p} load=${load} />` : html`
     <div class="tabs">
       <button class=${tab === "overview" ? "on" : ""} onClick=${() => setTab("overview")}>Overview</button>
@@ -950,9 +1036,15 @@ function Live({ m, onDone, compact }) {
   </div>`;
 }
 
+let projectsCache = [];
 function MeetingRow({ p, m, job }) {
   const status = job ? STEPS[job.step] || job.step : m.status === "error" ? "Failed" : m.status === "ready" ? null : STEPS[m.status] || m.status;
-  return html`<a class="mrow" href=${`#/p/${encodeURIComponent(p.id)}/m/${encodeURIComponent(m.id)}`}>
+  const menu = async (e) => {
+    e.preventDefault(); const at = { clientX: e.clientX, clientY: e.clientY, preventDefault() {}, stopPropagation() {} };
+    projectsCache = await api("/projects").catch(() => projectsCache);
+    openMenu(at, recordingMenu(p.id, m, projectsCache));
+  };
+  return html`<a class="mrow" href=${`#/p/${encodeURIComponent(p.id)}/m/${encodeURIComponent(m.id)}`} onContextMenu=${menu}>
     <span class="t">${m.title}</span>
     ${status ? html`<span class=${"badge" + (m.status === "error" ? " err" : "")} title=${m.error || ""}>${status}${job && job.progress ? ` ${Math.round(job.progress * 100)}%` : ""}</span>`
       : html`<span class="m">${m.duration ? clock(m.duration) : ""}</span>`}
@@ -1372,8 +1464,9 @@ const initials = (n) => n.split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[
 function People() {
   const [list, setList] = useState(null);
   const [name, setName] = useState("");
-  const load = () => api("/people").then(setList);
+  const load = useCallback(() => api("/people").then(setList), []);
   useEffect(() => { load(); }, []);
+  useChanged(load);
   const add = async (e) => {
     e.preventDefault();
     if (!name.trim()) return;
@@ -1387,7 +1480,7 @@ function People() {
       <input type="text" placeholder="Add someone by name" value=${name} onInput=${(e) => setName(e.target.value)} />
       <button class="btn">Add</button></form>
     ${list && !list.length ? html`<div class="empty">No people yet.</div>` : html`<div class="mlist">${(list || []).map((p) => html`
-      <a class="mrow" href=${"#/people/" + p.id}><span class="t"><span class="avatar">${initials(p.name)}</span> ${p.name}${p.me ? " (me)" : ""}</span>
+      <a class="mrow" href=${"#/people/" + p.id} onContextMenu=${(e) => openMenu(e, personMenu(p))}><span class="t"><span class="avatar">${initials(p.name)}</span> ${p.name}${p.me ? " (me)" : ""}</span>
         <span class="m">${p.voiceCount ? `${p.voiceCount} voice sample${p.voiceCount > 1 ? "s" : ""}` : "no voice yet"}</span>
         <span class="m">${p.projects.length} project${p.projects.length === 1 ? "" : "s"}${p.notes ? " · " + p.notes.slice(0, 80) : ""}</span></a>`)}</div>`}
   </div>`;

@@ -199,7 +199,7 @@ fun Home(nav: NavHostController) {
             } }
             items(projects, key = { it.id }) { p ->
                 val inbox = p.id == UNSORTED
-                Card(Modifier.fillMaxWidth().clickable { nav.navigate("project/${enc(p.id)}") }, colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surfaceContainer)) {
+                MenuCard({ nav.navigate("project/${enc(p.id)}") }, projectActions(nav, p.id, p.meta.name, p.meetings)) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(p.meta.name, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
                             color = if (inbox) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)
