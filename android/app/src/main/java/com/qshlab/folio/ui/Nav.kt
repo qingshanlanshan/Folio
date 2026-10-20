@@ -154,9 +154,9 @@ private fun BottomBar(nav: NavHostController, route: String?) {
 /** A top-level screen (one of the tabs): title, search and settings, no back arrow. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TabScreen(nav: NavHostController, title: String, actions: @Composable () -> Unit = {}, content: @Composable () -> Unit) {
+fun TabScreen(nav: NavHostController, title: String, actions: @Composable () -> Unit = {}, bar: (@Composable () -> Unit)? = null, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text(title, fontFamily = Heading, fontWeight = FontWeight.SemiBold) },
+        if (bar != null) bar() else TopAppBar(title = { Text(title, fontFamily = Heading, fontWeight = FontWeight.SemiBold) },
             actions = {
                 actions()
                 IconButton({ nav.navigate("search?q=&person=") }) { Icon(Icons.Default.Search, "Search") }
@@ -170,9 +170,9 @@ fun TabScreen(nav: NavHostController, title: String, actions: @Composable () -> 
 /** A plain screen with a back arrow and a title. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun Screen(nav: NavHostController, title: String, actions: @Composable () -> Unit = {}, content: @Composable () -> Unit) {
+fun Screen(nav: NavHostController, title: String, actions: @Composable () -> Unit = {}, bar: (@Composable () -> Unit)? = null, content: @Composable () -> Unit) {
     Column(Modifier.fillMaxSize()) {
-        TopAppBar(title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = Heading) },
+        if (bar != null) bar() else TopAppBar(title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontFamily = Heading) },
             navigationIcon = { IconButton({ nav.popBackStack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             actions = { actions() },
             colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background))
@@ -188,8 +188,12 @@ fun Home(nav: NavHostController) {
     val projects = remember(version, tasks.size) { app.store.listProjects() }
     var adding by remember { mutableStateOf(false) }
     val update by Updates.available.collectAsState()
+    val sel = rememberSelection()
+    val mine = projects.map { it.id }.filter { it != UNSORTED }
+    val selActions = projectSelection(sel)
 
-    TabScreen(nav, "Projects", actions = { TextButton({ adding = true }) { Text("New") } }) {
+    TabScreen(nav, "Projects", actions = { TextButton({ adding = true }) { Text("New") } },
+        bar = if (sel.on) ({ SelectionBar(sel, mine, selActions) }) else null) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             item { SetupCard(nav) }
             update?.let { u -> item {
@@ -199,7 +203,7 @@ fun Home(nav: NavHostController) {
             } }
             items(projects, key = { it.id }) { p ->
                 val inbox = p.id == UNSORTED
-                MenuCard({ nav.navigate("project/${enc(p.id)}") }, projectActions(nav, p.id, p.meta.name, p.meetings)) {
+                PickCard(p.id, if (inbox) null else sel, { nav.navigate("project/${enc(p.id)}") }) {
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(p.meta.name, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, fontSize = 16.sp,
                             color = if (inbox) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface)

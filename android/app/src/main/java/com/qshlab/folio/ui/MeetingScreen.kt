@@ -111,6 +111,7 @@ fun MeetingScreen(nav: NavHostController, pid: String, midAndT: String) {
     val paras = remember(t) { t?.paragraphs() ?: emptyList() }
     var tab by remember(summary != null) { mutableIntStateOf(if (summary != null || task?.kind == "summarize") 0 else 1) }
     var menu by remember { mutableStateOf(false) }
+    var sub by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<Paragraph?>(null) }
     var who by remember { mutableStateOf<Pair<Int, Paragraph?>?>(null) }
     var renaming by remember { mutableStateOf(false) }
@@ -146,27 +147,41 @@ fun MeetingScreen(nav: NavHostController, pid: String, midAndT: String) {
     }
 
     Screen(nav, meta.title, actions = {
-        IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }
+        IconButton({ menu = true; sub = "" }) { Icon(Icons.Default.MoreVert, "More") }
         DropdownMenu(menu, { menu = false }) {
             val busy = task != null
-            if (t != null) {
-                DropdownMenuItem({ Text("Fix: check text (Claude)") }, { menu = false; tab = 1; engine.submit(pid, mid, "correct", mapOf("mode" to "text")) }, enabled = !busy && engine.claude.key != null)
-                DropdownMenuItem({ Text("Fix: listen again (audio)") }, { menu = false; tab = 1; engine.submit(pid, mid, "correct", mapOf("mode" to "audio")) }, enabled = !busy && app.models.ready("whisper"))
-                DropdownMenuItem({ Text("Fix: both") }, { menu = false; tab = 1; engine.submit(pid, mid, "correct", mapOf("mode" to "both")) }, enabled = !busy && engine.claude.key != null)
+            // Choices with options open a second step in the same menu; its first row goes back.
+            @Composable fun step(head: String, vararg items: Pair<String, () -> Unit>) {
+                DropdownMenuItem({ Text("‹  $head", color = MaterialTheme.colorScheme.onSurfaceVariant) }, { sub = "" })
                 HorizontalDivider()
-                DropdownMenuItem({ Text("Summarize again") }, { menu = false; tab = 0; engine.submit(pid, mid, "summarize") }, enabled = !busy && engine.claude.key != null)
-                DropdownMenuItem({ Text("Find speakers again") }, { menu = false; engine.submit(pid, mid, "speakers") }, enabled = !busy)
-                for (n in listOf(2, 3, 4, 5, 6)) DropdownMenuItem({ Text("   …with $n speakers") }, { menu = false; engine.submit(pid, mid, "speakers", mapOf("speakers" to "$n")) }, enabled = !busy)
-                HorizontalDivider()
-                DropdownMenuItem({ Text("Export Markdown") }, { menu = false; share("md") })
-                DropdownMenuItem({ Text("Export text") }, { menu = false; share("txt") })
-                DropdownMenuItem({ Text("Export subtitles (SRT)") }, { menu = false; share("srt") })
-                HorizontalDivider()
+                for ((label, run) in items) DropdownMenuItem({ Text(label) }, { menu = false; run() })
             }
-            DropdownMenuItem({ Text("Rename") }, { menu = false; renaming = true })
-            DropdownMenuItem({ Text("Move to project…") }, { menu = false; moving = true }, enabled = task == null && meta.status != "recording")
-            DropdownMenuItem({ Text("Transcribe again") }, { menu = false; engine.submit(pid, mid, "process") }, enabled = !busy && meta.status != "recording")
-            DropdownMenuItem({ Text("Delete…") }, { menu = false; deleting = true })
+            fun fix(mode: String) { tab = 1; engine.submit(pid, mid, "correct", mapOf("mode" to mode)) }
+            fun speakers(n: Int?) = engine.submit(pid, mid, "speakers", if (n == null) emptyMap() else mapOf("speakers" to "$n"))
+            when (sub) {
+                "fix" -> step("Fix the transcript by",
+                    *listOfNotNull(
+                        ("Checking the text (Claude)" to { fix("text") }).takeIf { engine.claude.key != null },
+                        ("Listening again (audio)" to { fix("audio") }).takeIf { app.models.ready("whisper") },
+                        ("Both" to { fix("both") }).takeIf { engine.claude.key != null && app.models.ready("whisper") },
+                    ).toTypedArray())
+                "speakers" -> step("How many people spoke?", "Let Folio work it out" to { speakers(null) },
+                    *(2..8).map { n -> "$n people" to { speakers(n) } }.toTypedArray())
+                "export" -> step("Export as", "Markdown" to { share("md") }, "Plain text" to { share("txt") }, "Subtitles (SRT)" to { share("srt") })
+                else -> {
+                    if (t != null) {
+                        DropdownMenuItem({ Text("Fix transcript…") }, { sub = "fix" }, enabled = !busy && (engine.claude.key != null || app.models.ready("whisper")))
+                        DropdownMenuItem({ Text("Summarize again") }, { menu = false; tab = 0; engine.submit(pid, mid, "summarize") }, enabled = !busy && engine.claude.key != null)
+                        DropdownMenuItem({ Text("Find speakers again…") }, { sub = "speakers" }, enabled = !busy)
+                        DropdownMenuItem({ Text("Export…") }, { sub = "export" })
+                        HorizontalDivider()
+                    }
+                    DropdownMenuItem({ Text("Rename") }, { menu = false; renaming = true })
+                    DropdownMenuItem({ Text("Move to project…") }, { menu = false; moving = true }, enabled = task == null && meta.status != "recording")
+                    DropdownMenuItem({ Text("Transcribe again") }, { menu = false; engine.submit(pid, mid, "process") }, enabled = !busy && meta.status != "recording")
+                    DropdownMenuItem({ Text("Delete…") }, { menu = false; deleting = true })
+                }
+            }
         }
     }) {
         val live = rec

@@ -54,7 +54,7 @@ fun RecordScreen(nav: NavHostController) {
                 if (live.target != live.pid) Hint("It's saved to the project you picked when you stop.")
             } else {
                 Capture(pid)
-                Hint(if (pid == UNSORTED) "Unsorted keeps recordings until you file them: open the recording, then its menu → Move to project. In a project, summaries use its notes and earlier meetings."
+                Hint(if (pid == UNSORTED) "Unsorted keeps recordings until you file them: in Unsorted, long-press to choose some, then move them to a project. In a project, summaries use its notes and earlier meetings."
                      else "Folio transcribes it with speakers when you stop, and summarizes it with this project's notes and earlier meetings.")
             }
         }

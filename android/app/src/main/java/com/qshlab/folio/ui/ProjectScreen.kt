@@ -119,7 +119,10 @@ fun ProjectScreen(nav: NavHostController, pid: String) {
     var deleting by remember { mutableStateOf(false) }
 
     val unsorted = pid == com.qshlab.folio.data.UNSORTED
-    Screen(nav, meta.name, actions = {
+    val sel = rememberSelection()
+    val selActions = recordingSelection(pid, sel)
+    val allIds = remember(version, tasks, tick) { app.store.listMeetings(pid).map { it.id } }
+    Screen(nav, meta.name, bar = if (sel.on) ({ SelectionBar(sel, allIds, selActions) }) else null, actions = {
         if (!unsorted) {
             IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }
             DropdownMenu(menu, { menu = false }) {
@@ -132,17 +135,17 @@ fun ProjectScreen(nav: NavHostController, pid: String) {
             RecordBar(nav, pid)
             if (unsorted) {
                 // Not a project: just the recordings waiting to be filed.
-                Hint("Recordings you haven't filed yet. Long-press one to move it to a project; it's then summarized with that project's notes and earlier meetings.",
+                Hint("Recordings you haven't filed yet. Long-press to choose some, then move them to a project; they're then summarized with that project's notes and earlier meetings.",
                     Modifier.padding(bottom = 12.dp))
-                Recordings(nav, pid, tasks, version + tick)
+                Recordings(nav, pid, tasks, version + tick, sel)
             } else {
                 TabRow(tab, containerColor = MaterialTheme.colorScheme.background) {
                     listOf("Overview", "Recordings", "Knowledge").forEachIndexed { i, t -> Tab(tab == i, { tab = i }, text = { Text(t) }) }
                 }
                 Spacer(Modifier.height(12.dp))
                 when (tab) {
-                    0 -> Overview(nav, pid, version + tick)
-                    1 -> Recordings(nav, pid, tasks, version + tick)
+                    0 -> Overview(nav, pid, version + tick, sel)
+                    1 -> Recordings(nav, pid, tasks, version + tick, sel)
                     else -> Knowledge(pid)
                 }
             }
@@ -288,17 +291,16 @@ fun LiveCard(live: com.qshlab.folio.engine.LiveState, full: Boolean = false) {
 }
 
 @Composable
-private fun Recordings(nav: NavHostController, pid: String, tasks: List<Task>, version: Int) {
+private fun Recordings(nav: NavHostController, pid: String, tasks: List<Task>, version: Int, sel: Selection) {
     val app = FolioApp.instance
     val meetings = remember(version, tasks) { app.store.listMeetings(pid) }
     if (meetings.isEmpty()) { Hint(if (pid == com.qshlab.folio.data.UNSORTED) "Nothing here. Recordings you don't file in a project land here." else "No recordings yet. Record or import one above.", Modifier.padding(16.dp)); return }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { for (m in meetings) MeetingRow(nav, pid, m, tasks.firstOrNull { it.key == "$pid/${m.id}" }) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { for (m in meetings) MeetingRow(nav, pid, m, tasks.firstOrNull { it.key == "$pid/${m.id}" }, sel) }
 }
 
 @Composable
-fun MeetingRow(nav: NavHostController, pid: String, m: com.qshlab.folio.data.Store.MeetingInfo, task: Task?) {
-    val actions = recordingActions(nav, pid, m.id, m.meta.title, busy = task != null || m.meta.status == "recording")
-    MenuCard({ nav.navigate("meeting/${enc(pid)}/${enc(m.id)}?t=-1") }, actions) {
+fun MeetingRow(nav: NavHostController, pid: String, m: com.qshlab.folio.data.Store.MeetingInfo, task: Task?, sel: Selection? = null) {
+    PickCard(m.id, sel, { nav.navigate("meeting/${enc(pid)}/${enc(m.id)}?t=-1") }) {
         Column(Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(m.meta.title, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = 2)
@@ -330,7 +332,7 @@ private fun Knowledge(pid: String) {
 }
 
 @Composable
-private fun Overview(nav: NavHostController, pid: String, version: Int) {
+private fun Overview(nav: NavHostController, pid: String, version: Int, sel: Selection) {
     val app = FolioApp.instance
     val sums = app.engine.summaries
     val scope = rememberCoroutineScope()
@@ -368,7 +370,7 @@ private fun Overview(nav: NavHostController, pid: String, version: Int) {
     Todos(nav, pid, version)
     SectionTitle("Recent meetings")
     val tasks by app.engine.tasks.collectAsState()
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { for (m in meetings.take(5)) MeetingRow(nav, pid, m, tasks.firstOrNull { it.key == "$pid/${m.id}" }) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { for (m in meetings.take(5)) MeetingRow(nav, pid, m, tasks.firstOrNull { it.key == "$pid/${m.id}" }, sel) }
 }
 
 @Composable

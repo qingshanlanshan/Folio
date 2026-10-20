@@ -1,1 +1,1 @@
-Folio 0.4.1: long-press recordings, projects and people for quick actions (rename, move, delete); a smaller record bar on project pages; Unsorted is a simple list.
+Folio 0.4.2: long-press to choose several recordings, projects or people, then move, delete, summarize or rename them from the top bar; tell Folio when two speakers or two people are the same person; shorter recording menu.

@@ -69,11 +69,14 @@ fun PeopleScreen(nav: NavHostController) {
     val version by dataVersion.collectAsState()
     val people = remember(version) { app.engine.people.all() }
     var adding by remember { mutableStateOf(false) }
-    TabScreen(nav, "People", actions = { TextButton({ adding = true }) { Text("Add") } }) {
+    val sel = rememberSelection()
+    val selActions = personSelection(sel)
+    TabScreen(nav, "People", actions = { TextButton({ adding = true }) { Text("Add") } },
+        bar = if (sel.on) ({ SelectionBar(sel, people.map { it.id }, selActions) }) else null) {
         LazyColumn(Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item { Hint("Shared across projects. Name a speaker in any recording to add them; their voice is recognised next time.") }
             items(people, key = { it.id }) { p ->
-                MenuCard({ nav.navigate("person/${enc(p.id)}") }, personActions(nav, p.id, p.name)) {
+                PickCard(p.id, sel, { nav.navigate("person/${enc(p.id)}") }) {
                     Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                         Avatar(p.name); Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {

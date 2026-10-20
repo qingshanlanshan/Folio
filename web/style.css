@@ -351,3 +351,15 @@ a.btn { display: inline-flex; align-items: center; gap: 7px; text-decoration: no
 .ctxmenu button.danger:hover { background: var(--warn); color: #fff; }
 .ctxmenu hr { border: none; border-top: 1px solid var(--line); margin: 4px 6px; }
 .ctxhead { font-size: 11px; color: var(--muted); padding: 6px 10px 2px; text-transform: uppercase; letter-spacing: .05em; }
+
+/* choosing several items */
+.selbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 10px; border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line)); }
+.selbar select { font-size: 13px; padding: 4px 6px; }
+.selbar.compact { margin: 8px 0 0; padding: 6px; gap: 5px; font-size: 12.5px; }
+.selbar.compact .btn, .selbar.compact select { padding: 3px 7px; font-size: 12px; }
+.selbar.compact .spacer { flex-basis: 100%; }
+.mrow.picked, .plink.picked { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.tick { display: inline-block; width: 14px; height: 14px; margin-right: 8px; vertical-align: -2px; border-radius: 4px; border: 1.5px solid var(--muted); }
+.tick.on { background: var(--accent); border-color: var(--accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E"); }
