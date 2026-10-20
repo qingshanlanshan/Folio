@@ -367,6 +367,14 @@ private fun SpeakerSheet(pid: String, mid: String, t: Transcript, spk: Int, para
                 link(app.engine.people.create(q.trim(), pid).id)
             }.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.primary)
             if (info?.person != null) Text("Not ${info.name}", Modifier.fillMaxWidth().clickable { app.engine.people.unlink(pid, mid, spk.toString(), false); changed(); close() }.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val others = t.speakers.keys.mapNotNull { it.toIntOrNull() }.filter { it != spk }
+            if (others.isNotEmpty()) {
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Hint("Same person as")
+                for (s in others) Row(Modifier.fillMaxWidth().clickable {
+                    app.engine.people.mergeSpeakers(pid, mid, spk.toString(), s.toString()); changed(); close()
+                }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { Dot(speakerColor(s)); Spacer(Modifier.width(8.dp)); Text(t.speakerName(s)) }
+            }
             if (para != null) {
                 HorizontalDivider(Modifier.padding(vertical = 8.dp))
                 Hint("Only this paragraph was said by")

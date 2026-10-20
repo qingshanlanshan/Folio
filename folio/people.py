@@ -139,9 +139,12 @@ def link(project: str, meeting: str, speaker: str, person: str, auto: bool = Fal
             remove_prints_from(prev, project, meeting)
         except store.NotFound:
             pass
-    # A person is one speaker per meeting: unlink them elsewhere in this meeting.
+    # A person is one speaker per meeting. If you already named another speaker as them, the two are
+    # the same voice split in two: merge. An automatic match there was probably wrong: drop it.
     for k, other in t["speakers"].items():
         if k != speaker and other.get("person") == person:
+            if not other.get("auto"):
+                return merge_speakers(project, meeting, speaker, k)
             other.pop("person", None); other.pop("auto", None)
     s["person"] = person
     s.pop("suggested", None)
@@ -174,6 +177,101 @@ def unlink(project: str, meeting: str, speaker: str, reject: bool = False) -> di
         s.pop("suggested", None)
     store.write_json(d / "transcript.json", t)
     return t
+
+
+def merge_speakers(project: str, meeting: str, src: str, dst: str) -> dict:
+    """Two speakers in one recording are the same person: src's words become dst's."""
+    if src == dst:
+        raise ValueError("same speaker")
+    d = store.meeting_dir(project, meeting)
+    t = store.read_json(d / "transcript.json")
+    if src not in t["speakers"] or dst not in t["speakers"]:
+        raise store.NotFound(src if src not in t["speakers"] else dst)
+    secs = {src: 0.0, dst: 0.0}
+    for w in t["words"]:
+        k = str(w["speaker"])
+        if k in secs:
+            secs[k] += w["end"] - w["start"]
+            if k == src:
+                w["speaker"] = int(dst)
+    a, b = t["speakers"].pop(src), t["speakers"][dst]
+    if not b.get("person") and a.get("person"):
+        b.update(person=a["person"], auto=bool(a.get("auto")))
+        b.pop("suggested", None)
+    if not b.get("name") and a.get("name"):
+        b["name"] = a["name"]
+    if not b.get("person") and not b.get("suggested") and a.get("suggested"):
+        b["suggested"] = a["suggested"]
+    if not b.get("auto"):
+        b.pop("auto", None)
+    t["edited"] = True
+    store.write_json(d / "transcript.json", t)
+    # One voice for the merged speaker: the two prints, weighted by how long each spoke.
+    voices = meeting_voices(d)
+    va, vb = voices.pop(src, None), voices.get(dst)
+    if va is not None and vb is not None and va.shape == vb.shape:
+        ua, ub = va / (np.linalg.norm(va) + 1e-9), vb / (np.linalg.norm(vb) + 1e-9)
+        voices[dst] = (ua * secs[src] + ub * secs[dst]) / max(secs[src] + secs[dst], 1e-9)
+    elif va is not None:
+        voices[dst] = va
+    if (d / "voices.npz").exists():
+        np.savez(d / "voices.npz", **voices)
+    for pid in {a.get("person"), b.get("person")} - {None}:
+        try:
+            remove_prints_from(pid, project, meeting)
+        except store.NotFound:
+            pass
+    if b.get("person") and not b.get("auto") and dst in voices:
+        try:
+            add_print(b["person"], voices[dst], {"project": project, "meeting": meeting, "speaker": dst})
+        except store.NotFound:
+            pass
+    return t
+
+
+def merge_people(src: str, dst: str) -> dict:
+    """Two people are the same person: src's recordings, voice samples, names and notes move to dst."""
+    if src == dst:
+        raise ValueError("same person")
+    a, b = get(src), get(dst)
+    for proj in store.list_projects():
+        for m in store.list_meetings(proj["id"]):
+            d = store.meeting_dir(proj["id"], m["id"])
+            t = store.read_json(d / "transcript.json", default={})
+            sp = t.get("speakers", {})
+            ka = next((k for k, s in sp.items() if s.get("person") == src), None)
+            kb = next((k for k, s in sp.items() if s.get("person") == dst), None)
+            changed = False
+            for s in sp.values():
+                if (s.get("suggested") or {}).get("person") == src:
+                    s["suggested"]["person"] = dst; changed = True
+            if ka is not None:
+                sp[ka]["person"] = dst; changed = True
+            if changed:
+                store.write_json(d / "transcript.json", t)
+            if ka is not None and kb is not None:
+                merge_speakers(proj["id"], m["id"], ka, kb)
+    b = get(dst)
+    arr_a, arr_b = prints(src), prints(dst)
+    seen = {(v.get("project"), v.get("meeting")) for v in b["voices"]}
+    keep = [i for i, v in enumerate(a["voices"]) if (v.get("project"), v.get("meeting")) not in seen and i < len(arr_a)]
+    if keep:
+        rows = arr_a[keep]
+        if not arr_b.size or arr_b.shape[1] == rows.shape[1]:
+            np.save(PEOPLE / f"{dst}.voices.npy", (np.vstack([arr_b, rows]) if arr_b.size else rows).astype(np.float32))
+            b["voices"] += [a["voices"][i] for i in keep]
+    names = [x for x in [a["name"], *a.get("aliases", [])] if x and x.lower() != b["name"].lower()]
+    b["aliases"] = b.get("aliases", []) + [x for x in names if x.lower() not in {y.lower() for y in b.get("aliases", [])}]
+    b["projects"] = b["projects"] + [x for x in a["projects"] if x not in b["projects"]]
+    if a.get("notes", "").strip() and a["notes"].strip() not in b.get("notes", ""):
+        b["notes"] = (b.get("notes", "").rstrip() + "\n\n" + a["notes"].strip()).strip()
+    b["me"] = bool(b.get("me") or a.get("me"))
+    store.write_json(PEOPLE / f"{dst}.json", {k: v for k, v in b.items() if k != "id"})
+    store.trash(_path(src))
+    v = PEOPLE / f"{src}.voices.npy"
+    if v.exists():
+        store.trash(v)
+    return get(dst)
 
 
 def match(project: str, meeting: str) -> None:

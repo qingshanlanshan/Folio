@@ -101,7 +101,8 @@ function App() {
 
 // openMenu(event, items): items are { label, run, danger } or null for a divider, or { heading }.
 let showMenu = null;
-function openMenu(e, items) { e.preventDefault(); e.stopPropagation(); showMenu && showMenu({ x: e.clientX, y: e.clientY, items }); }
+let lastMenu = { x: 0, y: 0 };
+function openMenu(e, items) { e.preventDefault(); e.stopPropagation(); lastMenu = { x: e.clientX, y: e.clientY }; showMenu && showMenu({ ...lastMenu, items }); }
 
 // Something changed through a menu: pages listening re-read their data.
 function changed() { dispatchEvent(new Event("folio-changed")); }
@@ -166,12 +167,28 @@ function projectMenu(p) {
     } }];
 }
 
+async function mergePerson(p, into) {
+  if (!confirm(`Merge ${p.name} into ${into.name}? Their recordings, voice samples and notes move to ${into.name}, and “${p.name}” is kept as another name.`)) return;
+  try {
+    await api(`/people/${p.id}/merge`, { json: { into: into.id } });
+    toast(`Merged into ${into.name}`);
+    if (location.hash === "#/people/" + p.id) location.hash = "#/people/" + into.id;
+    changed();
+  } catch (e) { toast(e.message); }
+}
+
 function personMenu(p) {
   return [{ label: "Open", run: () => { location.hash = "#/people/" + p.id; } },
     { label: "Everything they said", run: () => { location.hash = "#/search/" + encodeURIComponent("@" + p.id); } },
     { label: "Rename…", run: async () => {
       const n = prompt("Rename", p.name);
       if (n && n.trim() && n !== p.name) { try { await api("/people/" + p.id, { method: "PUT", json: { name: n.trim() } }); changed(); } catch (e) { toast(e.message); } }
+    } },
+    { label: "Same person as…", run: async () => {
+      const others = (await api("/people")).filter((x) => x.id !== p.id);
+      if (!others.length) return toast("There's no one else yet.");
+      showMenu({ x: lastMenu.x, y: lastMenu.y, items: [{ heading: `${p.name} is the same person as` },
+        ...others.map((o) => ({ label: o.name, run: () => mergePerson(p, o) }))] });
     } },
     null,
     { label: "Remove…", danger: true, run: async () => {
@@ -1326,6 +1343,10 @@ function SpeakerMenu({ menu, t, people, act, close }) {
       <span class="avatar">${initials(p.name)}</span>${p.name}${p.id === info.person ? html`<span class="spacer"></span>✓` : null}</div>`)}
     ${ql && !exact ? html`<div class="mi" onClick=${() => linkTo({ name: q.trim() })}><span class="avatar new">+</span>New person “${q.trim()}”</div>` : null}
     ${info.person ? html`<div class="mi muted" onClick=${() => { act("unlink", spk, {}); close(); }}>Not ${info.name}</div>` : null}
+    ${ids.length > 1 ? html`<hr />
+      <div class="lbl">Same person as</div>
+      ${ids.filter((s) => s !== spk).map((s) => html`<div class="mi" onClick=${() => { act("merge", spk, { into: String(s) }); close(); }}>
+        <i class="dot" style=${"background:" + color(s)}></i>${spkName(t, s)}</div>`)}` : null}
     ${para ? html`<hr />
       <div class="lbl">Only this paragraph was said by</div>
       ${ids.filter((s) => s !== para.speaker).map((s) => html`<div class="mi" onClick=${() => { act("para", para, s); close(); }}>
@@ -1490,8 +1511,13 @@ function Person({ id, projects }) {
   const [p, setP] = useState(null);
   const [notes, setNotes] = useState("");
   const [aliases, setAliases] = useState("");
-  const load = () => api("/people/" + id).then((x) => { setP(x); setNotes(x.notes); setAliases(x.aliases.join(", ")); });
+  const [others, setOthers] = useState([]);
+  const load = () => {
+    api("/people/" + id).then((x) => { setP(x); setNotes(x.notes); setAliases(x.aliases.join(", ")); });
+    api("/people").then((xs) => setOthers(xs.filter((x) => x.id !== id)));
+  };
   useEffect(() => { load(); }, [id]);
+  useChanged(load);
   if (!p) return html`<div class="page"></div>`;
   const save = async (body) => { await api("/people/" + id, { method: "PUT", json: body }); load(); };
   const remove = async () => {
@@ -1515,7 +1541,10 @@ function Person({ id, projects }) {
       <textarea rows="5" value=${notes} onInput=${(e) => setNotes(e.target.value)}></textarea>
       <div class="row" style="margin-top:10px">
         <button class="btn primary" disabled=${!dirty} onClick=${() => save({ notes, aliases: aliases.split(",").map((x) => x.trim()).filter(Boolean) })}>Save</button>
-        <span class="spacer"></span><button class="btn danger" onClick=${remove}>Remove person</button></div>
+        <span class="spacer"></span>
+        ${others.length ? html`<select class="btn" value="" onChange=${(e) => { const o = others.find((x) => x.id === e.target.value); e.target.value = ""; o && mergePerson(p, o); }}>
+          <option value="">Same person as…</option>${others.map((o) => html`<option value=${o.id}>${o.name}</option>`)}</select>` : null}
+        <button class="btn danger" onClick=${remove}>Remove person</button></div>
     </div>
     <h3 style="margin-top:28px">Spoke in</h3>
     ${p.appearances.length ? html`<div class="mlist">${p.appearances.map((a) => html`

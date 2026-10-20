@@ -103,6 +103,7 @@ fun PersonScreen(nav: NavHostController, id: String) {
     var renaming by remember { mutableStateOf(false) }
     var removing by remember { mutableStateOf(false) }
     fun save(np: com.qshlab.folio.data.Person) { ppl.save(np); v++; changed() }
+    val merge = mergePersonAction(id, p.name) { into -> nav.navigate("person/${enc(into)}") { popUpTo("person/{id}") { inclusive = true } } }
     Screen(nav, p.name, actions = { TextButton({ renaming = true }) { Text("Rename") } }) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -119,7 +120,8 @@ fun PersonScreen(nav: NavHostController, id: String) {
                 Button({ save(p.copy(notes = notes, aliases = aliases.split(",").map { it.trim() }.filter { it.isNotEmpty() })) },
                     enabled = notes != p.notes || aliases != p.aliases.joinToString(", ")) { Text("Save") }
                 Spacer(Modifier.weight(1f))
-                TextButton({ removing = true }) { Text("Remove person", color = MaterialTheme.colorScheme.error) }
+                TextButton(merge.run) { Text(merge.label) }
+                TextButton({ removing = true }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
             }
             SectionTitle("Spoke in")
             if (appearances.isEmpty()) Hint("Not in any recording yet.")

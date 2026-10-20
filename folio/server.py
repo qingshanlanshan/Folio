@@ -470,6 +470,27 @@ def unlink_speaker(pid: str, mid: str, spk: str, body: LinkIn):
     return meeting(pid, mid)
 
 
+class MergeIn(BaseModel):
+    into: str
+
+
+@app.post("/api/projects/{pid}/meetings/{mid}/speakers/{spk}/merge")
+def merge_speaker(pid: str, mid: str, spk: str, body: MergeIn):
+    try:
+        people.merge_speakers(pid, mid, spk, body.into)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return meeting(pid, mid)
+
+
+@app.post("/api/people/{person}/merge")
+def merge_person(person: str, body: MergeIn):
+    try:
+        return people.merge_people(person, body.into)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/search")
 def do_search(q: str = "", person: str | None = None):
     return search.search(q, person)

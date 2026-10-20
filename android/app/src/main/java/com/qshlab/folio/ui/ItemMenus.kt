@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import com.qshlab.folio.FolioApp
+import com.qshlab.folio.data.Person
 import com.qshlab.folio.data.UNSORTED
 
 /** One choice in a long-press menu. */
@@ -69,6 +70,35 @@ fun ProjectPickerDialog(title: String, except: String, dismiss: () -> Unit, pick
             }
         },
         confirmButton = { TextButton(dismiss) { Text("Cancel") } })
+}
+
+/** Pick a person (not [except]). */
+@Composable
+fun PersonPickerDialog(title: String, except: String, dismiss: () -> Unit, pick: (Person) -> Unit) {
+    val people = remember { FolioApp.instance.engine.people.all().filter { it.id != except } }
+    AlertDialog(onDismissRequest = dismiss, title = { Text(title) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                for (p in people) Text(p.name, Modifier.fillMaxWidth().clickable { dismiss(); pick(p) }.padding(vertical = 12.dp))
+                if (people.isEmpty()) Hint("There's no one else yet.")
+            }
+        },
+        confirmButton = { TextButton(dismiss) { Text("Cancel") } })
+}
+
+/** "Same person as…": pick another person, confirm, merge into them. [done] gets the person kept. */
+@Composable
+fun mergePersonAction(id: String, name: String, done: (String) -> Unit = {}): MenuAction {
+    val app = FolioApp.instance
+    var picking by remember { mutableStateOf(false) }
+    var into by remember { mutableStateOf<Person?>(null) }
+    if (picking) PersonPickerDialog("$name is the same person as", id, { picking = false }) { into = it }
+    into?.let { o ->
+        ConfirmDialog("Merge $name into ${o.name}?", "Their recordings, voice samples and notes move to ${o.name}, and “$name” is kept as another name.", "Merge", { into = null }) {
+            runCatching { app.engine.people.mergePeople(id, o.id) }.onSuccess { changed(); done(o.id) }.onFailure { app.lastError.value = it.message }
+        }
+    }
+    return MenuAction("Same person as…") { picking = true }
 }
 
 /** The long-press choices for a recording, with their dialogs. Returns the menu to show. */
@@ -124,6 +154,7 @@ fun personActions(nav: NavHostController, id: String, name: String): List<MenuAc
     if (deleting) ConfirmDialog("Remove $name?", "Recordings keep their text; the speaker just becomes unnamed.", "Remove", { deleting = false }) {
         app.engine.people.delete(id); changed()
     }
+    val merge = mergePersonAction(id, name)
     return listOf(MenuAction("Open") { nav.navigate("person/${enc(id)}") }, MenuAction("Rename") { renaming = true },
-        MenuAction("Remove…", danger = true) { deleting = true })
+        merge, MenuAction("Remove…", danger = true) { deleting = true })
 }
