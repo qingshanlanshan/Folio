@@ -109,6 +109,11 @@ Sync protocol (same format in `folio/sync.py` and `android/…/sync/Sync.kt`): e
 objects (change batches and content-addressed 8 MiB pieces, AES-256-GCM); per file, the highest
 (clock, device) wins; deletions go to the trash.
 
+## License
+
+MIT ([LICENSE](LICENSE)). The speech and language models are downloaded at run time and keep their own
+licenses.
+
 ---
 
 More from qshlab: <https://qshlab.com>
